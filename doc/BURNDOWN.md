@@ -8,13 +8,13 @@ Updated: 2026-09-28
 | 2. Establish the Index Model | 4 | 4 | 0 |
 | 3. Implement NTFS Initial Indexing | 4 | 4 | 0 |
 | 4. Maintain the Index | 4 | 4 | 0 |
-| 5. Improve Search and User Experience | 6 | 3 | 3 |
+| 5. Improve Search and User Experience | 6 | 4 | 2 |
 | 6. Persistence, Packaging, and Operations | 5 | 0 | 5 |
-| **Total** | **27** | **19** | **8** |
+| **Total** | **27** | **20** | **7** |
 
 ```text
-Completed [###################........] 19/27
-Remaining [########...................] 8/27
+Completed [####################.......] 20/27
+Remaining [#######....................] 7/27
 ```
 
 Milestone 1 is complete. Workspace traversal, relative paths, `target`/`.git`
@@ -98,3 +98,6 @@ term. Results are ranked by the sum of their per-term ranks.
 
 Results show their type, key attributes, and full path. Double-clicking a
 result opens it, and **Show in folder** opens Explorer with the item selected.
+
+The UI now uses eframe/egui with a menu bar, a sortable result table with a
+row context menu, and a status bar, following the mockup in `doc/mockup`.

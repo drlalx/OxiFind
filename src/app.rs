@@ -1,16 +1,15 @@
 use std::{
-    cell::{Cell, RefCell},
     error::Error,
     io,
     ops::ControlFlow,
     path::{Component, Path, PathBuf, Prefix},
-    rc::Rc,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 
-use slint::{ModelRc, VecModel};
+use eframe::egui;
+use egui_extras::{Column, TableBuilder};
 
 use crate::{
     ntfs::NtfsMftSource,
@@ -27,86 +26,132 @@ const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
 const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0000_0004;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 
-slint::slint! {
-    import { Button, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
+const APP_NAME: &str = "Everything Lite";
+const SEARCH_FIELD_ID: &str = "search_field";
 
-    export struct ResultRow {
-        title: string,
-        detail: string,
-        path: string,
-    }
+const SEARCH_SYNTAX: [(&str, &str); 7] = [
+    ("text", "File name or path contains text"),
+    ("a b", "Every term must match"),
+    ("^text", "File name starts with text"),
+    ("=text", "File name is exactly text"),
+    ("path:text", "Full path contains text"),
+    ("\"a b\"", "Quotes keep spaces inside a term"),
+    (
+        "sort:name|path|type|relevance",
+        "Orders results; a leading - reverses the order",
+    ),
+];
 
-    export component MainWindow inherits Window {
-        in-out property <string> query: "";
-        in property <[ResultRow]> results: [];
-        in property <string> status: "";
-        callback query_changed(string);
-        callback open_result(string);
-        callback reveal_result(string);
+/// One result as shown in the table: file name, containing folder, and type.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ResultRow {
+    name: String,
+    folder: String,
+    kind: String,
+    is_folder: bool,
+    path: String,
+}
 
-        VerticalBox {
-            padding: 12px;
-            spacing: 8px;
-
-            Text {
-                text: "Everything Lite";
-                font-size: 22px;
-            }
-
-            LineEdit {
-                text <=> root.query;
-                placeholder-text: "Search files";
-                edited => {
-                    root.query_changed(self.text);
-                }
-            }
-
-            Text {
-                text: root.status;
-            }
-
-            ScrollView {
-                vertical-stretch: 1;
-                VerticalBox {
-                    spacing: 4px;
-                    for item in root.results : Rectangle {
-                        height: row.preferred-height;
-
-                        TouchArea {
-                            double-clicked => {
-                                root.open_result(item.path);
-                            }
-                        }
-
-                        row := HorizontalLayout {
-                            spacing: 8px;
-
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                Text {
-                                    text: item.title;
-                                    overflow: elide;
-                                }
-                                Text {
-                                    text: item.detail;
-                                    font-size: 11px;
-                                    color: #808080;
-                                    overflow: elide;
-                                }
-                            }
-
-                            Button {
-                                text: "Show in folder";
-                                clicked => {
-                                    root.reveal_result(item.path);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+impl ResultRow {
+    fn from_result(result: SearchResult) -> Self {
+        let path = Path::new(&result.path);
+        // Volume roots have no file name, so they show their whole path as the name.
+        let (name, folder) = match (path.file_name(), path.parent()) {
+            (Some(name), Some(parent)) => (
+                name.to_string_lossy().into_owned(),
+                parent.display().to_string(),
+            ),
+            _ => (result.path.clone(), String::new()),
+        };
+        Self {
+            name,
+            folder,
+            kind: describe_attributes(result.attributes),
+            is_folder: result.attributes & FILE_ATTRIBUTE_DIRECTORY != 0,
+            path: result.path,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum SortColumn {
+    #[default]
+    Relevance,
+    Name,
+    Path,
+    Type,
+}
+
+impl SortColumn {
+    const ALL: [Self; 4] = [Self::Relevance, Self::Name, Self::Path, Self::Type];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Relevance => "Relevance",
+            Self::Name => "Name",
+            Self::Path => "Path",
+            Self::Type => "Type",
+        }
+    }
+
+    fn query_key(self) -> &'static str {
+        match self {
+            Self::Relevance => "relevance",
+            Self::Name => "name",
+            Self::Path => "path",
+            Self::Type => "type",
+        }
+    }
+}
+
+/// The sort order chosen through column headers or the View menu.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ResultSort {
+    column: SortColumn,
+    descending: bool,
+}
+
+impl ResultSort {
+    /// Clicking the active column reverses it; any other column starts ascending.
+    fn toggled(self, column: SortColumn) -> Self {
+        Self {
+            column,
+            descending: self.column == column && !self.descending,
+        }
+    }
+
+    fn header_label(self, column: SortColumn) -> String {
+        match (self.column == column, self.descending) {
+            (true, false) => format!("{} \u{2B06}", column.label()),
+            (true, true) => format!("{} \u{2B07}", column.label()),
+            (false, _) => column.label().to_owned(),
+        }
+    }
+
+    fn status_label(self) -> String {
+        let direction = if self.descending {
+            "descending"
+        } else {
+            "ascending"
+        };
+        format!("Sort: {} ({direction})", self.column.label())
+    }
+}
+
+/// Prefixes the UI sort order, so a `sort:` term typed into the query still wins.
+fn effective_query(query: &str, sort: ResultSort) -> String {
+    if sort == ResultSort::default() {
+        return query.to_owned();
+    }
+    let direction = if sort.descending { "-" } else { "" };
+    format!("sort:{direction}{} {query}", sort.column.query_key())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RowAction {
+    Explorer(OpenAction),
+    CopyName,
+    CopyPath,
 }
 
 #[derive(Default)]
@@ -146,153 +191,551 @@ enum WorkerResponse {
 }
 
 pub fn run(root: PathBuf) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let window = MainWindow::new()?;
-    window.set_status(format_indexing_status(&root).into());
-    window.set_results(make_results_model(Vec::new()));
-
-    let (request_tx, request_rx) = mpsc::channel::<WorkerCommand>();
-    let (response_tx, response_rx) = mpsc::channel::<WorkerResponse>();
-    spawn_search_worker(root.clone(), request_tx.clone(), request_rx, response_tx);
-
-    let latest_revision = Rc::new(Cell::new(0_u64));
-    let is_indexing = Rc::new(Cell::new(true));
-    let worker_stopped = Rc::new(Cell::new(false));
-    let response_rx = Rc::new(RefCell::new(response_rx));
-    let window_weak = window.as_weak();
-    let timer = slint::Timer::default();
-
-    timer.start(slint::TimerMode::Repeated, Duration::from_millis(33), {
-        let response_rx = Rc::clone(&response_rx);
-        let latest_revision = Rc::clone(&latest_revision);
-        let is_indexing = Rc::clone(&is_indexing);
-        let worker_stopped = Rc::clone(&worker_stopped);
-        let window_weak = window_weak.clone();
-        move || {
-            loop {
-                match response_rx.borrow_mut().try_recv() {
-                    Ok(WorkerResponse::IndexReady {
-                        indexed_items,
-                        indexing_issues,
-                        indexing_duration,
-                        initial_results,
-                    }) => {
-                        is_indexing.set(false);
-                        if let Some(window) = window_weak.upgrade() {
-                            window.set_results(make_results_model(initial_results));
-                            window.set_status(
-                                format_index_status(
-                                    &root,
-                                    indexing_duration,
-                                    indexed_items,
-                                    indexing_issues,
-                                )
-                                .into(),
-                            );
-                        }
-                    }
-                    Ok(WorkerResponse::SearchResults(response)) => {
-                        if response.revision == latest_revision.get() {
-                            if let Some(window) = window_weak.upgrade() {
-                                let result_count = response.results.len();
-                                window.set_results(make_results_model(response.results));
-                                window.set_status(format!("{result_count} results").into());
-                            }
-                        }
-                    }
-                    Ok(WorkerResponse::IndexingFailed(error)) => {
-                        is_indexing.set(false);
-                        worker_stopped.set(true);
-                        if let Some(window) = window_weak.upgrade() {
-                            window.set_status(format!("Indexing failed: {error}").into());
-                        }
-                    }
-                    Ok(WorkerResponse::IndexUpdated {
-                        indexed_items,
-                        indexing_issues,
-                        refreshed,
-                    }) => {
-                        if let Some(window) = window_weak.upgrade() {
-                            // A newer query's own response will follow, already based on this snapshot.
-                            if refreshed.revision == latest_revision.get() {
-                                window.set_results(make_results_model(refreshed.results));
-                            }
-                            window.set_status(
-                                format_update_status(indexed_items, indexing_issues).into(),
-                            );
-                        }
-                    }
-                    Ok(WorkerResponse::UpdateFailed(message)) => {
-                        if let Some(window) = window_weak.upgrade() {
-                            window.set_status(message.into());
-                        }
-                    }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        if !worker_stopped.replace(true) {
-                            if let Some(window) = window_weak.upgrade() {
-                                window.set_status("Search worker stopped".into());
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    window.on_query_changed({
-        let latest_revision = Rc::clone(&latest_revision);
-        let is_indexing = Rc::clone(&is_indexing);
-        let worker_stopped = Rc::clone(&worker_stopped);
-        let request_tx = request_tx.clone();
-        let window_weak = window_weak.clone();
-        move |query| {
-            let revision = latest_revision.get().saturating_add(1);
-            latest_revision.set(revision);
-
-            if worker_stopped.get() {
-                return;
-            }
-
-            if !is_indexing.get() {
-                if let Some(window) = window_weak.upgrade() {
-                    window.set_status(format!("Searching for \"{}\"", query).into());
-                }
-            }
-
-            if request_tx
-                .send(WorkerCommand::Search(SearchRequest {
-                    revision,
-                    query: query.to_string(),
-                }))
-                .is_err()
-            {
-                worker_stopped.set(true);
-                if let Some(window) = window_weak.upgrade() {
-                    window.set_status("Search worker stopped".into());
-                }
-            }
-        }
-    });
-
-    window.on_open_result({
-        let window_weak = window_weak.clone();
-        move |path| open_from_ui(&window_weak, &path, OpenAction::Open)
-    });
-    window.on_reveal_result({
-        let window_weak = window_weak.clone();
-        move |path| open_from_ui(&window_weak, &path, OpenAction::Reveal)
-    });
-
-    window.run()?;
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title(APP_NAME)
+            .with_inner_size([1100.0, 700.0])
+            .with_min_inner_size([520.0, 320.0]),
+        ..Default::default()
+    };
+    eframe::run_native(
+        APP_NAME,
+        options,
+        Box::new(|creation| Ok(Box::new(SearchApp::new(root, creation.egui_ctx.clone())))),
+    )
+    .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Sends worker responses and wakes the UI, so it only repaints when something changed.
+struct ResponseSender {
+    tx: mpsc::Sender<WorkerResponse>,
+    ctx: egui::Context,
+}
+
+impl Default for ResponseSender {
+    fn default() -> Self {
+        Self {
+            tx: mpsc::channel().0,
+            ctx: egui::Context::default(),
+        }
+    }
+}
+
+impl ResponseSender {
+    fn send(&self, response: WorkerResponse) -> Result<(), mpsc::SendError<WorkerResponse>> {
+        self.tx.send(response)?;
+        self.ctx.request_repaint();
+        Ok(())
+    }
+}
+
+struct SearchApp {
+    root: PathBuf,
+    request_tx: mpsc::Sender<WorkerCommand>,
+    response_rx: mpsc::Receiver<WorkerResponse>,
+    query: String,
+    sort: ResultSort,
+    rows: Vec<ResultRow>,
+    selected: Option<usize>,
+    latest_revision: u64,
+    is_indexing: bool,
+    worker_stopped: bool,
+    index_status: String,
+    notice: Option<String>,
+    show_status_bar: bool,
+    show_syntax_help: bool,
+    show_about: bool,
+    focus_search: bool,
+}
+
+/// An app without a worker; `SearchApp::new` connects one.
+impl Default for SearchApp {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::new(),
+            request_tx: mpsc::channel().0,
+            response_rx: mpsc::channel().1,
+            query: String::new(),
+            sort: ResultSort::default(),
+            rows: Vec::new(),
+            selected: None,
+            latest_revision: 0,
+            is_indexing: false,
+            worker_stopped: true,
+            index_status: String::new(),
+            notice: None,
+            show_status_bar: true,
+            show_syntax_help: false,
+            show_about: false,
+            focus_search: true,
+        }
+    }
+}
+
+impl SearchApp {
+    fn new(root: PathBuf, ctx: egui::Context) -> Self {
+        let (request_tx, request_rx) = mpsc::channel::<WorkerCommand>();
+        let (response_tx, response_rx) = mpsc::channel::<WorkerResponse>();
+        spawn_search_worker(
+            root.clone(),
+            request_tx.clone(),
+            request_rx,
+            ResponseSender {
+                tx: response_tx,
+                ctx,
+            },
+        );
+
+        Self {
+            index_status: format_indexing_status(&root),
+            root,
+            request_tx,
+            response_rx,
+            is_indexing: true,
+            worker_stopped: false,
+            ..Self::default()
+        }
+    }
+
+    fn drain_responses(&mut self) {
+        loop {
+            match self.response_rx.try_recv() {
+                Ok(response) => self.apply_response(response),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.mark_worker_stopped();
+                    break;
+                }
+            }
+        }
+    }
+
+    fn apply_response(&mut self, response: WorkerResponse) {
+        match response {
+            WorkerResponse::IndexReady {
+                indexed_items,
+                indexing_issues,
+                indexing_duration,
+                initial_results,
+            } => {
+                self.is_indexing = false;
+                self.index_status = format_index_status(
+                    &self.root,
+                    indexing_duration,
+                    indexed_items,
+                    indexing_issues,
+                );
+                // Queries typed during indexing are answered right after this response.
+                if self.latest_revision == 0 {
+                    self.set_rows(initial_results);
+                }
+            }
+            WorkerResponse::SearchResults(response) => {
+                if response.revision == self.latest_revision {
+                    self.set_rows(response.results);
+                }
+            }
+            WorkerResponse::IndexingFailed(error) => {
+                self.is_indexing = false;
+                self.worker_stopped = true;
+                self.index_status = format!("Indexing failed: {error}");
+            }
+            WorkerResponse::IndexUpdated {
+                indexed_items,
+                indexing_issues,
+                refreshed,
+            } => {
+                // A newer query's own response will follow, already based on this snapshot.
+                if refreshed.revision == self.latest_revision {
+                    self.set_rows(refreshed.results);
+                }
+                self.index_status = format_update_status(indexed_items, indexing_issues);
+            }
+            WorkerResponse::UpdateFailed(message) => self.notice = Some(message),
+        }
+    }
+
+    /// Replaces the rows and keeps the selection on the same path when it is still listed.
+    fn set_rows(&mut self, results: Vec<SearchResult>) {
+        let selected_path = self
+            .selected
+            .and_then(|index| self.rows.get(index))
+            .map(|row| row.path.clone());
+        self.rows = results.into_iter().map(ResultRow::from_result).collect();
+        self.selected =
+            selected_path.and_then(|path| self.rows.iter().position(|row| row.path == path));
+    }
+
+    fn mark_worker_stopped(&mut self) {
+        if !self.worker_stopped {
+            self.worker_stopped = true;
+            self.is_indexing = false;
+            self.index_status = "Search worker stopped".to_owned();
+        }
+    }
+
+    fn send_search(&mut self) {
+        self.latest_revision = self.latest_revision.saturating_add(1);
+        self.notice = None;
+        if self.worker_stopped {
+            return;
+        }
+
+        let request = SearchRequest {
+            revision: self.latest_revision,
+            query: effective_query(&self.query, self.sort),
+        };
+        if self
+            .request_tx
+            .send(WorkerCommand::Search(request))
+            .is_err()
+        {
+            self.mark_worker_stopped();
+        }
+    }
+
+    fn set_sort(&mut self, sort: ResultSort) {
+        if sort != self.sort {
+            self.sort = sort;
+            self.send_search();
+        }
+    }
+
+    fn clear_search(&mut self) {
+        if !self.query.is_empty() {
+            self.query.clear();
+            self.send_search();
+        }
+        self.focus_search = true;
+    }
+
+    fn selected_row(&self) -> Option<usize> {
+        self.selected.filter(|&index| index < self.rows.len())
+    }
+
+    fn run_row_action(&mut self, ctx: &egui::Context, index: usize, action: RowAction) {
+        let Some(row) = self.rows.get(index) else {
+            return;
+        };
+        match action {
+            RowAction::Explorer(open) => {
+                if let Err(error) = open_in_explorer(Path::new(&row.path), open) {
+                    self.notice = Some(format!("Could not open {}: {error}", row.path));
+                }
+            }
+            RowAction::CopyName => ctx.copy_text(row.name.clone()),
+            RowAction::CopyPath => ctx.copy_text(row.path.clone()),
+        }
+    }
+
+    fn run_selected_action(&mut self, ctx: &egui::Context, action: RowAction) {
+        if let Some(index) = self.selected_row() {
+            self.run_row_action(ctx, index, action);
+        }
+    }
+
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        let focus_search = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::F);
+        let copy_path = egui::KeyboardShortcut::new(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::C,
+        );
+        let clear = egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Escape);
+
+        if ctx.input_mut(|input| input.consume_shortcut(&focus_search)) {
+            self.focus_search = true;
+        }
+        if ctx.input_mut(|input| input.consume_shortcut(&copy_path)) {
+            self.run_selected_action(ctx, RowAction::CopyPath);
+        }
+        if ctx.input_mut(|input| input.consume_shortcut(&clear)) {
+            self.clear_search();
+        }
+    }
+
+    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        let has_selection = self.selected_row().is_some();
+
+        ui.menu_button("File", |ui| {
+            if ui.button("Exit").clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        });
+
+        ui.menu_button("Edit", |ui| {
+            if ui
+                .add_enabled(has_selection, egui::Button::new("Copy name"))
+                .clicked()
+            {
+                self.run_selected_action(ui.ctx(), RowAction::CopyName);
+            }
+            if ui
+                .add_enabled(
+                    has_selection,
+                    egui::Button::new("Copy full path").shortcut_text("Ctrl+Shift+C"),
+                )
+                .clicked()
+            {
+                self.run_selected_action(ui.ctx(), RowAction::CopyPath);
+            }
+            ui.separator();
+            if ui
+                .add(egui::Button::new("Clear search").shortcut_text("Esc"))
+                .clicked()
+            {
+                self.clear_search();
+            }
+        });
+
+        ui.menu_button("View", |ui| {
+            ui.checkbox(&mut self.show_status_bar, "Status bar");
+            ui.separator();
+            ui.menu_button("Sort by", |ui| {
+                let mut sort = self.sort;
+                for column in SortColumn::ALL {
+                    ui.radio_value(&mut sort.column, column, column.label());
+                }
+                ui.separator();
+                ui.radio_value(&mut sort.descending, false, "Ascending");
+                ui.radio_value(&mut sort.descending, true, "Descending");
+                self.set_sort(sort);
+            });
+            ui.menu_button("Theme", |ui| {
+                let mut theme = ui.options(|options| options.theme_preference);
+                theme.radio_buttons(ui);
+                ui.ctx().set_theme(theme);
+            });
+            ui.separator();
+            egui::gui_zoom::zoom_menu_buttons(ui);
+        });
+
+        ui.menu_button("Search", |ui| {
+            if ui
+                .add(egui::Button::new("Focus search field").shortcut_text("Ctrl+F"))
+                .clicked()
+            {
+                self.focus_search = true;
+            }
+            if ui
+                .add_enabled(
+                    has_selection,
+                    egui::Button::new("Open selected").shortcut_text("Enter"),
+                )
+                .clicked()
+            {
+                self.run_selected_action(ui.ctx(), RowAction::Explorer(OpenAction::Open));
+            }
+            if ui
+                .add_enabled(
+                    has_selection,
+                    egui::Button::new("Show selected in folder").shortcut_text("Ctrl+Enter"),
+                )
+                .clicked()
+            {
+                self.run_selected_action(ui.ctx(), RowAction::Explorer(OpenAction::Reveal));
+            }
+        });
+
+        ui.menu_button("Help", |ui| {
+            if ui.button("Search syntax").clicked() {
+                self.show_syntax_help = true;
+            }
+            if ui.button(format!("About {APP_NAME}")).clicked() {
+                self.show_about = true;
+            }
+        });
+    }
+
+    fn search_bar(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut self.query)
+                .id(egui::Id::new(SEARCH_FIELD_ID))
+                .hint_text("Search files   ^prefix   =exact   path:text   sort:name")
+                .font(egui::FontId::proportional(16.0))
+                .margin(egui::Margin::symmetric(8, 6))
+                .desired_width(f32::INFINITY),
+        );
+        if std::mem::take(&mut self.focus_search) {
+            response.request_focus();
+        }
+        if response.changed() {
+            self.send_search();
+        }
+        // Enter ends single-line editing, which reports the field as having lost focus.
+        if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+            let open = if ui.input(|input| input.modifiers.command) {
+                OpenAction::Reveal
+            } else {
+                OpenAction::Open
+            };
+            let index = self.selected_row().unwrap_or(0);
+            self.run_row_action(ui.ctx(), index, RowAction::Explorer(open));
+            self.focus_search = true;
+        }
+        ui.add_space(4.0);
+    }
+
+    fn results_table(&mut self, ui: &mut egui::Ui) {
+        let row_height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
+        let mut clicked_column = None;
+        let mut selected = self.selected;
+        let mut action = None;
+
+        TableBuilder::new(ui)
+            .striped(true)
+            .resizable(true)
+            .sense(egui::Sense::click())
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Column::initial(300.0).at_least(120.0).clip(true))
+            .column(Column::initial(520.0).at_least(160.0).clip(true))
+            .column(Column::remainder().at_least(80.0).clip(true))
+            .header(row_height + 4.0, |mut header| {
+                for column in [SortColumn::Name, SortColumn::Path, SortColumn::Type] {
+                    header.col(|ui| {
+                        let active = self.sort.column == column;
+                        if ui
+                            .selectable_label(active, self.sort.header_label(column))
+                            .clicked()
+                        {
+                            clicked_column = Some(column);
+                        }
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(row_height, self.rows.len(), |mut row| {
+                    let index = row.index();
+                    let result = &self.rows[index];
+                    row.set_selected(selected == Some(index));
+                    row.col(|ui| {
+                        let icon = if result.is_folder {
+                            "\u{1F5C0}"
+                        } else {
+                            "\u{1F5CB}"
+                        };
+                        ui.weak(icon);
+                        ui.label(&result.name);
+                    });
+                    row.col(|ui| {
+                        ui.label(&result.folder);
+                    });
+                    row.col(|ui| {
+                        ui.weak(&result.kind);
+                    });
+
+                    let response = row.response();
+                    if response.clicked() || response.secondary_clicked() {
+                        selected = Some(index);
+                    }
+                    if response.double_clicked() {
+                        action = Some((index, RowAction::Explorer(OpenAction::Open)));
+                    }
+                    response.context_menu(|ui| {
+                        let items = [
+                            ("Open", RowAction::Explorer(OpenAction::Open)),
+                            ("Show in folder", RowAction::Explorer(OpenAction::Reveal)),
+                            ("Copy name", RowAction::CopyName),
+                            ("Copy full path", RowAction::CopyPath),
+                        ];
+                        for (position, (label, item)) in items.into_iter().enumerate() {
+                            if position == 2 {
+                                ui.separator();
+                            }
+                            if ui.button(label).clicked() {
+                                action = Some((index, item));
+                            }
+                        }
+                    });
+                });
+            });
+
+        self.selected = selected;
+        if let Some(column) = clicked_column {
+            self.set_sort(self.sort.toggled(column));
+        }
+        if let Some((index, action)) = action {
+            self.run_row_action(ui.ctx(), index, action);
+        }
+    }
+
+    fn status_bar(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if self.is_indexing {
+                ui.spinner();
+            } else {
+                ui.strong(format!("{} results", self.rows.len()));
+                ui.separator();
+            }
+            ui.label(&self.index_status);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak(self.sort.status_label());
+                if let Some(notice) = &self.notice {
+                    ui.separator();
+                    ui.colored_label(ui.visuals().warn_fg_color, notice);
+                }
+            });
+        });
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Search syntax")
+            .open(&mut self.show_syntax_help)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                egui::Grid::new("search_syntax")
+                    .striped(true)
+                    .spacing([16.0, 6.0])
+                    .show(ui, |ui| {
+                        for (syntax, meaning) in SEARCH_SYNTAX {
+                            ui.monospace(syntax);
+                            ui.label(meaning);
+                            ui.end_row();
+                        }
+                    });
+            });
+
+        egui::Window::new(format!("About {APP_NAME}"))
+            .open(&mut self.show_about)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading(format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")));
+                ui.label("Fast file-name search for Windows.");
+                ui.label(format!("Index root: {}", self.root.display()));
+            });
+    }
+}
+
+impl eframe::App for SearchApp {
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.drain_responses();
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.handle_shortcuts(&ctx);
+
+        egui::Panel::top("menu_bar").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| self.menu_bar(ui));
+        });
+        egui::Panel::top("search_bar").show(ui, |ui| self.search_bar(ui));
+        if self.show_status_bar {
+            egui::Panel::bottom("status_bar").show(ui, |ui| self.status_bar(ui));
+        }
+        egui::CentralPanel::default().show(ui, |ui| self.results_table(ui));
+
+        self.dialogs(&ctx);
+    }
 }
 
 fn spawn_search_worker(
     root: PathBuf,
     command_tx: mpsc::Sender<WorkerCommand>,
     command_rx: mpsc::Receiver<WorkerCommand>,
-    response_tx: mpsc::Sender<WorkerResponse>,
+    response_tx: ResponseSender,
 ) {
     thread::spawn(move || {
         // Drive roots require MFT access; a failure is reported instead of falling back to walking.
@@ -318,7 +761,7 @@ fn run_search_worker<S: IndexSource + Send + 'static>(
     source: S,
     command_tx: mpsc::Sender<WorkerCommand>,
     command_rx: mpsc::Receiver<WorkerCommand>,
-    response_tx: mpsc::Sender<WorkerResponse>,
+    response_tx: ResponseSender,
 ) {
     let indexing_started = Instant::now();
     let mut index = match SearchIndex::from_source(&source) {
@@ -436,19 +879,6 @@ fn is_volume_root(path: &Path) -> bool {
     is_drive && matches!(components.next(), Some(Component::RootDir)) && components.next().is_none()
 }
 
-fn make_results_model(results: Vec<SearchResult>) -> ModelRc<ResultRow> {
-    ModelRc::new(VecModel::from(
-        results
-            .into_iter()
-            .map(|result| ResultRow {
-                detail: format_result_detail(&result).into(),
-                title: result.display.into(),
-                path: result.path.into(),
-            })
-            .collect::<Vec<_>>(),
-    ))
-}
-
 fn describe_attributes(attributes: u32) -> String {
     let kind = if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
         "Folder"
@@ -465,15 +895,6 @@ fn describe_attributes(attributes: u32) -> String {
     .fold(kind.to_owned(), |description, (_, label)| {
         format!("{description}, {label}")
     })
-}
-
-fn format_result_detail(result: &SearchResult) -> String {
-    let kind = describe_attributes(result.attributes);
-    if result.path == result.display {
-        kind
-    } else {
-        format!("{kind} - {}", result.path)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -514,15 +935,6 @@ fn open_in_explorer(path: &Path, _action: OpenAction) -> io::Result<()> {
         io::ErrorKind::Unsupported,
         format!("opening {} requires Windows Explorer", path.display()),
     ))
-}
-
-fn open_from_ui(window_weak: &slint::Weak<MainWindow>, path: &str, action: OpenAction) {
-    if let (Err(error), Some(window)) = (
-        open_in_explorer(Path::new(path), action),
-        window_weak.upgrade(),
-    ) {
-        window.set_status(format!("Could not open {path}: {error}").into());
-    }
 }
 
 fn format_indexing_status(root: &std::path::Path) -> String {
@@ -572,9 +984,10 @@ mod tests {
     };
 
     use super::{
-        OpenAction, SearchRequest, WorkerCommand, WorkerResponse, describe_attributes,
-        explorer_argument, format_index_status, format_indexing_status, format_result_detail,
-        format_update_status, handle_command, is_volume_root, poll_updates,
+        OpenAction, ResultRow, ResultSort, SearchApp, SearchRequest, SearchResponse, SortColumn,
+        WorkerCommand, WorkerResponse, describe_attributes, effective_query, explorer_argument,
+        format_index_status, format_indexing_status, format_update_status, handle_command,
+        is_volume_root, poll_updates,
     };
 
     fn displays(results: &[SearchResult]) -> Vec<&str> {
@@ -595,23 +1008,135 @@ mod tests {
     }
 
     #[test]
-    fn shows_the_full_path_only_when_it_differs_from_the_display() {
-        let relative = SearchResult {
+    fn splits_result_paths_into_name_and_folder() {
+        let row = ResultRow::from_result(SearchResult {
             display: r"nested\a.txt".to_owned(),
             path: r"C:\root\nested\a.txt".to_owned(),
-            attributes: 0,
-        };
-        let absolute = SearchResult {
-            display: r"C:\root\nested".to_owned(),
-            path: r"C:\root\nested".to_owned(),
-            attributes: 0x0000_0010,
-        };
+            attributes: 0x0000_0001,
+        });
 
         assert_eq!(
-            format_result_detail(&relative),
-            r"File - C:\root\nested\a.txt"
+            row,
+            ResultRow {
+                name: "a.txt".to_owned(),
+                folder: r"C:\root\nested".to_owned(),
+                kind: "File, read-only".to_owned(),
+                is_folder: false,
+                path: r"C:\root\nested\a.txt".to_owned(),
+            }
         );
-        assert_eq!(format_result_detail(&absolute), "Folder");
+    }
+
+    #[test]
+    fn shows_volume_roots_by_their_full_path() {
+        let row = ResultRow::from_result(SearchResult {
+            display: r"C:\".to_owned(),
+            path: r"C:\".to_owned(),
+            attributes: 0x0000_0010,
+        });
+
+        assert_eq!(row.name, r"C:\");
+        assert_eq!(row.folder, "");
+        assert!(row.is_folder);
+    }
+
+    #[test]
+    fn header_clicks_start_ascending_and_reverse_the_active_column() {
+        let by_name = ResultSort::default().toggled(SortColumn::Name);
+        assert_eq!(
+            by_name,
+            ResultSort {
+                column: SortColumn::Name,
+                descending: false
+            }
+        );
+        assert!(by_name.toggled(SortColumn::Name).descending);
+        assert!(
+            !by_name
+                .toggled(SortColumn::Name)
+                .toggled(SortColumn::Name)
+                .descending
+        );
+        assert_eq!(
+            by_name.toggled(SortColumn::Name).toggled(SortColumn::Path),
+            ResultSort {
+                column: SortColumn::Path,
+                descending: false
+            }
+        );
+    }
+
+    #[test]
+    fn prefixes_non_default_sort_orders_so_typed_sort_terms_win() {
+        assert_eq!(effective_query("abc", ResultSort::default()), "abc");
+        assert_eq!(
+            effective_query(
+                "abc sort:type",
+                ResultSort {
+                    column: SortColumn::Path,
+                    descending: true
+                }
+            ),
+            "sort:-path abc sort:type"
+        );
+    }
+
+    fn result(path: &str) -> SearchResult {
+        SearchResult {
+            display: path.to_owned(),
+            path: path.to_owned(),
+            attributes: 0,
+        }
+    }
+
+    fn search_results(revision: u64, paths: &[&str]) -> WorkerResponse {
+        WorkerResponse::SearchResults(SearchResponse {
+            revision,
+            results: paths.iter().map(|path| result(path)).collect(),
+        })
+    }
+
+    #[test]
+    fn ignores_results_for_superseded_queries() {
+        let mut app = SearchApp {
+            latest_revision: 2,
+            ..SearchApp::default()
+        };
+
+        app.apply_response(search_results(1, &[r"C:\stale.txt"]));
+        assert!(app.rows.is_empty());
+
+        app.apply_response(search_results(2, &[r"C:\fresh.txt"]));
+        assert_eq!(app.rows.len(), 1);
+        assert_eq!(app.rows[0].name, "fresh.txt");
+    }
+
+    #[test]
+    fn keeps_the_selected_path_selected_across_result_updates() {
+        let mut app = SearchApp::default();
+        app.apply_response(search_results(0, &[r"C:\a.txt", r"C:\b.txt"]));
+        app.selected = Some(1);
+
+        app.apply_response(search_results(0, &[r"C:\b.txt", r"C:\c.txt"]));
+        assert_eq!(app.selected, Some(0));
+
+        app.apply_response(search_results(0, &[r"C:\c.txt"]));
+        assert_eq!(app.selected, None);
+    }
+
+    #[test]
+    fn keeps_the_indexing_failure_when_the_worker_disconnects() {
+        let mut app = SearchApp {
+            is_indexing: true,
+            worker_stopped: false,
+            ..SearchApp::default()
+        };
+
+        app.apply_response(WorkerResponse::IndexingFailed("access denied".to_owned()));
+        app.drain_responses();
+
+        assert!(!app.is_indexing);
+        assert_eq!(app.index_status, "Indexing failed: access denied");
     }
 
     #[test]

@@ -156,7 +156,7 @@ collections leave the checkpoints unchanged and are shown in the status line.
 4. Add cancellation or request coalescing so stale queries never update the UI.
 5. Measure query latency and indexing memory usage against the benchmark
    fixtures.
-6. Replace the Slint UI with an eframe/egui UI following
+6. [x] Replace the Slint UI with an eframe/egui UI following
    [the UI mockup](mockup/ui-mockup.html): menu bar, search field, result
    table with sortable columns, row context menu, and status bar.
 
@@ -181,6 +181,15 @@ text, a detail line with the type, key attributes, and the full path when it
 differs from the display, and a **Show in folder** button; double-clicking a
 row opens the item. Both actions start Explorer directly with a quoted
 absolute path, without a shell.
+
+The UI now uses eframe/egui instead of Slint. A menu bar (File, Edit, View,
+Search, Help) sits above the search field; results are shown in a virtualized
+`egui_extras` table with Name, Path, and Type columns whose headers set the
+sort order; each row has a context menu for opening, showing in the folder,
+and copying the name or path; and a status bar reports the result count, index
+state, and sort order. The worker wakes the UI through the egui context after
+every response instead of a polling timer. Size and date columns from the
+mockup still need size and timestamp metadata in the index.
 
 ## Milestone 6: Persistence, Packaging, and Operations
 

@@ -7,10 +7,13 @@ Rust. It is independent of and not affiliated with Voidtools or Everything.
 
 ## Current functionality
 
-- A native desktop UI built with [Slint](https://slint.dev/).
-- Each result shows its type (file or folder, plus read-only, hidden, and
-  system attributes) and its full path. Double-clicking a result opens it,
-  and **Show in folder** opens its folder in Explorer with the item selected.
+- A native desktop UI built with [egui](https://github.com/emilk/egui)
+  (eframe), with a menu bar, a search field, a sortable result table, and a
+  status bar (see [Using the window](#using-the-window)).
+- Each result shows its file name, containing folder, and type (file or
+  folder, plus read-only, hidden, and system attributes). Double-clicking a
+  result opens it; its context menu can also show it in its folder in
+  Explorer or copy its name or full path.
 - Recursive indexing of the directory from which the application is started.
 - Case-insensitive search by file name or path, with multiple terms, prefix,
   exact-name, path-only, and quoted terms (see [Search syntax](#search-syntax)).
@@ -98,6 +101,25 @@ relevance and then by the displayed path, so every order is deterministic. The
 last valid `sort:` term wins, and an unknown key such as `sort:size` is searched
 for as ordinary text.
 
+## Using the window
+
+Clicking the **Name**, **Path**, or **Type** column header sorts by that
+column; clicking it again reverses the order. **View > Sort by** also offers
+relevance and the direction. A `sort:` term typed into the query overrides the
+chosen column.
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+F` | Focus the search field. |
+| `Enter` | Open the selected result, or the first one if none is selected. |
+| `Ctrl+Enter` | Show the selected result in its folder. |
+| `Ctrl+Shift+C` | Copy the selected result's full path. |
+| `Esc` | Clear the search. |
+| `Ctrl++` / `Ctrl+-` | Zoom in or out. |
+
+The **View** menu also toggles the status bar and switches between the system,
+light, and dark themes. **Help > Search syntax** lists the query syntax.
+
 ## Running the application
 
 Install a supported Rust toolchain, then run the application with an optional
@@ -108,8 +130,7 @@ cargo run -- C:\path\to\index
 ```
 
 Without an argument, the current working directory becomes the index root.
-Search results show paths relative to that root, with the full path in the
-detail line below each result.
+The **Path** column shows each result's containing folder.
 
 To index a whole NTFS volume and keep it up to date, pass its drive root from
 an elevated terminal:
@@ -126,7 +147,7 @@ with an explicit error instead of falling back to walking the drive.
 | Module | Responsibility |
 | --- | --- |
 | `src/main.rs` | Starts the application and reports startup errors. |
-| `src/app.rs` | Defines the Slint UI, selects the index source, coordinates search requests, and applies background journal updates. |
+| `src/app.rs` | Defines the egui UI, selects the index source, coordinates search requests, and applies background journal updates. |
 | `src/search.rs` | Defines source-independent entry metadata, update contracts, and journal checkpoints; collects workspace entries, stores the index, and ranks queries. |
 | `src/ntfs.rs` | Validates NTFS volume access, enumerates a volume's active master file table records into index entries, records USN journal checkpoints, and composes several validated volumes into one snapshot. |
 

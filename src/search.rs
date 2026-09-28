@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+
 #[derive(Clone, Debug, Default)]
 pub struct SearchEntry {
     pub display: String,
@@ -258,13 +260,15 @@ impl SearchIndex {
     /// Terms are separated by whitespace outside double quotes. `^text` matches file names
     /// starting with `text`, `=text` matches whole file names, `path:text` matches only the
     /// full path, and any other term matches the file name or the path. Matching ignores case.
+    /// `sort:relevance|name|path|type`, optionally with a leading `-` to reverse it, orders the
+    /// results; ties fall back to relevance and then to the display order.
     pub fn search(&self, query: &str, limit: usize) -> Vec<String> {
         if limit == 0 {
             return Vec::new();
         }
 
-        let terms = parse_query(query);
-        if terms.is_empty() {
+        let Query { terms, sort } = parse_query(query);
+        if terms.is_empty() && sort == SortOrder::default() {
             return self
                 .entries
                 .iter()
@@ -280,8 +284,21 @@ impl SearchIndex {
             .collect();
 
         matches.sort_by(|(left_score, left_entry), (right_score, right_entry)| {
-            left_score
-                .cmp(right_score)
+            let primary = match sort.key {
+                SortKey::Relevance => left_score.cmp(right_score),
+                SortKey::Name => {
+                    compare_text(&left_entry.metadata.name, &right_entry.metadata.name)
+                }
+                SortKey::Path => compare_text(&left_entry.path, &right_entry.path),
+                SortKey::Type => is_directory(right_entry).cmp(&is_directory(left_entry)),
+            };
+            let primary = if sort.descending {
+                primary.reverse()
+            } else {
+                primary
+            };
+            primary
+                .then_with(|| left_score.cmp(right_score))
                 .then_with(|| compare_entries(left_entry, right_entry))
         });
         matches.truncate(limit);
@@ -320,6 +337,37 @@ fn compare_entries(left: &SearchEntry, right: &SearchEntry) -> Ordering {
         .then_with(|| left.path.cmp(&right.path))
 }
 
+fn compare_text(left: &str, right: &str) -> Ordering {
+    left.to_lowercase()
+        .cmp(&right.to_lowercase())
+        .then_with(|| left.cmp(right))
+}
+
+fn is_directory(entry: &SearchEntry) -> bool {
+    entry.metadata.attributes & FILE_ATTRIBUTE_DIRECTORY != 0
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum SortKey {
+    #[default]
+    Relevance,
+    Name,
+    Path,
+    Type,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SortOrder {
+    key: SortKey,
+    descending: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct Query {
+    terms: Vec<QueryTerm>,
+    sort: SortOrder,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum TermKind {
     #[default]
@@ -335,24 +383,52 @@ struct QueryTerm {
     needle: String,
 }
 
-/// Parses a query into lowercase terms, dropping terms that have no text left after their modifier.
-fn parse_query(query: &str) -> Vec<QueryTerm> {
-    split_terms(query)
-        .into_iter()
-        .filter_map(|raw| {
-            // Modifiers only count before any quote, so quoted text stays literal.
-            let (kind, rest) = match raw.get(..5) {
-                Some(head) if head.eq_ignore_ascii_case("path:") => (TermKind::Path, &raw[5..]),
-                _ => match (raw.strip_prefix('^'), raw.strip_prefix('=')) {
-                    (Some(rest), _) => (TermKind::Prefix, rest),
-                    (_, Some(rest)) => (TermKind::Exact, rest),
-                    _ => (TermKind::Contains, raw.as_str()),
-                },
+/// Parses a query into lowercase terms and a sort order, dropping terms that have no text left
+/// after their modifier. The last valid `sort:` term wins; unknown sort keys stay search text.
+fn parse_query(query: &str) -> Query {
+    let mut parsed = Query::default();
+
+    for raw in split_terms(query) {
+        // Modifiers only count before any quote, so quoted text stays literal.
+        let head = raw.get(..5);
+        if let Some(head) = head.filter(|head| head.eq_ignore_ascii_case("sort:")) {
+            let value = raw[head.len()..].replace('"', "").to_lowercase();
+            let (descending, key) = match value.strip_prefix('-') {
+                Some(key) => (true, key),
+                None => (false, value.as_str()),
             };
-            let needle = rest.replace('"', "").to_lowercase();
-            (!needle.is_empty()).then_some(QueryTerm { kind, needle })
-        })
-        .collect()
+            let key = match key {
+                "relevance" => Some(SortKey::Relevance),
+                "name" => Some(SortKey::Name),
+                "path" => Some(SortKey::Path),
+                "type" => Some(SortKey::Type),
+                _ => None,
+            };
+            match key {
+                Some(key) => {
+                    parsed.sort = SortOrder { key, descending };
+                    continue;
+                }
+                None if value.is_empty() => continue,
+                None => {}
+            }
+        }
+
+        let (kind, rest) = match head {
+            Some(head) if head.eq_ignore_ascii_case("path:") => (TermKind::Path, &raw[5..]),
+            _ => match (raw.strip_prefix('^'), raw.strip_prefix('=')) {
+                (Some(rest), _) => (TermKind::Prefix, rest),
+                (_, Some(rest)) => (TermKind::Exact, rest),
+                _ => (TermKind::Contains, raw.as_str()),
+            },
+        };
+        let needle = rest.replace('"', "").to_lowercase();
+        if !needle.is_empty() {
+            parsed.terms.push(QueryTerm { kind, needle });
+        }
+    }
+
+    parsed
 }
 
 /// Splits on whitespace outside double quotes; the quotes stay in the returned terms.
@@ -517,6 +593,9 @@ fn collect_directories(
                 }
             };
             if file_type.is_dir() {
+                if let Some(directory) = out.last_mut() {
+                    directory.metadata.attributes |= FILE_ATTRIBUTE_DIRECTORY;
+                }
                 directories.push(path);
             }
         }
@@ -635,6 +714,12 @@ mod tests {
 
     fn entry(display: &str, path: &str) -> SearchEntry {
         SearchEntry::from_path(display.to_owned(), PathBuf::from(path))
+    }
+
+    fn directory(display: &str, path: &str) -> SearchEntry {
+        let mut entry = entry(display, path);
+        entry.metadata.attributes = 0x0000_0010;
+        entry
     }
 
     fn volume_entry(
@@ -772,6 +857,7 @@ mod tests {
         assert_eq!(index.entries[2].metadata.parent_id, None);
         assert_eq!(index.entries[2].metadata.volume_identity, None);
         assert_eq!(index.entries[2].metadata.attributes, 0);
+        assert_eq!(index.entries[1].metadata.attributes, 0x0000_0010);
     }
 
     #[cfg(windows)]
@@ -1228,6 +1314,88 @@ mod tests {
             index.search("alpha beta", 10),
             vec!["alpha-beta.txt", "beta.txt", "x-alpha-beta.txt"],
         );
+    }
+
+    fn sort_fixture() -> SearchIndex {
+        index(vec![
+            entry(r"zeta\alpha.txt", r"C:\zeta\alpha.txt"),
+            entry("beta.txt", r"C:\beta.txt"),
+            entry(r"alpha\gamma.txt", r"C:\alpha\gamma.txt"),
+        ])
+    }
+
+    #[test]
+    fn sorts_results_by_file_name() {
+        assert_eq!(
+            sort_fixture().search("sort:name", 10),
+            vec![r"zeta\alpha.txt", "beta.txt", r"alpha\gamma.txt"],
+        );
+    }
+
+    #[test]
+    fn reverses_a_sort_key_prefixed_with_a_minus_sign() {
+        assert_eq!(
+            sort_fixture().search("SORT:-name", 10),
+            vec![r"alpha\gamma.txt", "beta.txt", r"zeta\alpha.txt"],
+        );
+    }
+
+    #[test]
+    fn sorts_results_by_full_path() {
+        assert_eq!(
+            sort_fixture().search("sort:path", 10),
+            vec![r"alpha\gamma.txt", "beta.txt", r"zeta\alpha.txt"],
+        );
+        assert_eq!(
+            sort_fixture().search("sort:name sort:path", 10),
+            sort_fixture().search("sort:path", 10),
+        );
+    }
+
+    #[test]
+    fn sorts_folders_before_files_by_type() {
+        let index = index(vec![
+            entry("alpha.txt", r"C:\alpha.txt"),
+            directory("zeta", r"C:\zeta"),
+            directory("beta", r"C:\beta"),
+        ]);
+
+        assert_eq!(
+            index.search("sort:type", 10),
+            vec!["beta", "zeta", "alpha.txt"]
+        );
+        assert_eq!(
+            index.search("sort:-type", 10),
+            vec!["alpha.txt", "beta", "zeta"]
+        );
+    }
+
+    #[test]
+    fn breaks_sort_key_ties_by_relevance() {
+        let index = index(vec![
+            directory("calpine", r"C:\calpine"),
+            entry("alpha.txt", r"C:\alpha.txt"),
+            directory("alpine", r"C:\alpine"),
+        ]);
+
+        assert_eq!(
+            index.search("alp sort:type", 10),
+            vec!["alpine", "calpine", "alpha.txt"],
+        );
+    }
+
+    #[test]
+    fn keeps_relevance_order_for_sort_relevance() {
+        assert_eq!(
+            sort_fixture().search("a sort:relevance", 10),
+            sort_fixture().search("a", 10),
+        );
+    }
+
+    #[test]
+    fn treats_unknown_sort_keys_as_search_text() {
+        assert!(sort_fixture().search("sort:size", 10).is_empty());
+        assert_eq!(sort_fixture().search("sort:", 10).len(), 3);
     }
 
     #[test]

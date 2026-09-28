@@ -150,7 +150,7 @@ collections leave the checkpoints unchanged and are shown in the status line.
 
 1. [x] Add tokenized matching, prefix matching, path matching, and exact-match
    filters with documented syntax.
-2. Preserve deterministic ranking and add metadata-based sorting options.
+2. [x] Preserve deterministic ranking and add metadata-based sorting options.
 3. Show full paths and key metadata in results; provide open-file and
    open-containing-folder actions.
 4. Add cancellation or request coalescing so stale queries never update the UI.
@@ -166,6 +166,12 @@ prefixes, whole file names, or full paths, and quotes keep whitespace inside a
 term. Terms match the entry's file name rather than its display text, and
 results are ranked by the sum of their per-term ranks. The syntax is
 documented in the README.
+
+`sort:relevance`, `sort:name`, `sort:path`, and `sort:type` (folders first),
+optionally reversed with a leading `-`, order the results by entry metadata.
+Ties fall back to relevance and then to the display order, so every order is
+deterministic. The workspace source now marks directories with the directory
+attribute so type ordering works for both sources.
 
 ## Milestone 6: Persistence, Packaging, and Operations
 

@@ -21,7 +21,8 @@ Rust. It is independent of and not affiliated with Voidtools or Everything.
   entries for future search benchmarks.
 - Result ordering that sums a rank per query term: a file name beginning with
   the term ranks first, then a file name containing it, then a matching path.
-- Deterministic case-insensitive ordering for equally ranked results.
+- Deterministic case-insensitive ordering for equally ranked results, plus
+  `sort:` terms for name, path, and folder-first ordering.
 - Asynchronous search execution to keep the UI responsive while typing.
 - Initial indexing runs in a background worker so the UI remains responsive.
 - Startup status shows the index root, elapsed indexing time, and any
@@ -79,6 +80,20 @@ ignores case.
 Modifiers are only recognized before any quote, so `"^text"` searches for the
 literal text `^text`. Terms without text, such as a lone `^`, are ignored, and
 a query without terms lists the first indexed entries.
+
+A `sort:` term orders the results instead of filtering them:
+
+| Term | Order |
+| --- | --- |
+| `sort:relevance` | Default: file-name prefix matches, then file-name matches, then path matches. |
+| `sort:name` | File name. |
+| `sort:path` | Full path. |
+| `sort:type` | Folders before files. |
+
+A leading `-`, such as `sort:-name`, reverses the order. Ties are broken by
+relevance and then by the displayed path, so every order is deterministic. The
+last valid `sort:` term wins, and an unknown key such as `sort:size` is searched
+for as ordinary text.
 
 ## Running the application
 

@@ -8,13 +8,13 @@ Updated: 2026-09-28
 | 2. Establish the Index Model | 4 | 4 | 0 |
 | 3. Implement NTFS Initial Indexing | 4 | 4 | 0 |
 | 4. Maintain the Index | 4 | 4 | 0 |
-| 5. Improve Search and User Experience | 5 | 1 | 4 |
+| 5. Improve Search and User Experience | 5 | 2 | 3 |
 | 6. Persistence, Packaging, and Operations | 5 | 0 | 5 |
-| **Total** | **26** | **17** | **9** |
+| **Total** | **26** | **18** | **8** |
 
 ```text
-Completed [#################.........] 17/26
-Remaining [#########.................] 9/26
+Completed [##################........] 18/26
+Remaining [########..................] 8/26
 ```
 
 Milestone 1 is complete. Workspace traversal, relative paths, `target`/`.git`
@@ -92,3 +92,6 @@ Milestone 5 has started with a documented search syntax: whitespace-separated
 terms must all match, `^`, `=`, and `path:` restrict a term to file-name
 prefixes, whole file names, or full paths, and quotes keep whitespace inside a
 term. Results are ranked by the sum of their per-term ranks.
+
+`sort:` terms now order results by relevance, file name, full path, or type
+(folders first), optionally reversed, with deterministic tie-breakers.

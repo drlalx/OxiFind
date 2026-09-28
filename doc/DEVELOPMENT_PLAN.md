@@ -151,7 +151,7 @@ collections leave the checkpoints unchanged and are shown in the status line.
 1. [x] Add tokenized matching, prefix matching, path matching, and exact-match
    filters with documented syntax.
 2. [x] Preserve deterministic ranking and add metadata-based sorting options.
-3. Show full paths and key metadata in results; provide open-file and
+3. [x] Show full paths and key metadata in results; provide open-file and
    open-containing-folder actions.
 4. Add cancellation or request coalescing so stale queries never update the UI.
 5. Measure query latency and indexing memory usage against the benchmark
@@ -172,6 +172,12 @@ optionally reversed with a leading `-`, order the results by entry metadata.
 Ties fall back to relevance and then to the display order, so every order is
 deterministic. The workspace source now marks directories with the directory
 attribute so type ordering works for both sources.
+
+Results now carry their full path and attributes. Each row shows the display
+text, a detail line with the type, key attributes, and the full path when it
+differs from the display, and a **Show in folder** button; double-clicking a
+row opens the item. Both actions start Explorer directly with a quoted
+absolute path, without a shell.
 
 ## Milestone 6: Persistence, Packaging, and Operations
 

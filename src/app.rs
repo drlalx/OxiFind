@@ -10,24 +10,39 @@ use std::{
     time::{Duration, Instant},
 };
 
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{ModelRc, VecModel};
 
 use crate::{
     ntfs::NtfsMftSource,
-    search::{IndexSource, JournalCheckpoint, SearchIndex, UpdateBatch, WorkspaceSource},
+    search::{
+        IndexSource, JournalCheckpoint, SearchIndex, SearchResult, UpdateBatch, WorkspaceSource,
+    },
 };
 
 const RESULT_LIMIT: usize = 200;
 const UPDATE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
+const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
+const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
+const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0000_0004;
+const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+
 slint::slint! {
-    import { LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
+    import { Button, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
+
+    export struct ResultRow {
+        title: string,
+        detail: string,
+        path: string,
+    }
 
     export component MainWindow inherits Window {
         in-out property <string> query: "";
-        in property <[string]> results: [];
+        in property <[ResultRow]> results: [];
         in property <string> status: "";
         callback query_changed(string);
+        callback open_result(string);
+        callback reveal_result(string);
 
         VerticalBox {
             padding: 12px;
@@ -54,8 +69,39 @@ slint::slint! {
                 vertical-stretch: 1;
                 VerticalBox {
                     spacing: 4px;
-                    for item in root.results : Text {
-                        text: item;
+                    for item in root.results : Rectangle {
+                        height: row.preferred-height;
+
+                        TouchArea {
+                            double-clicked => {
+                                root.open_result(item.path);
+                            }
+                        }
+
+                        row := HorizontalLayout {
+                            spacing: 8px;
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: item.title;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: item.detail;
+                                    font-size: 11px;
+                                    color: #808080;
+                                    overflow: elide;
+                                }
+                            }
+
+                            Button {
+                                text: "Show in folder";
+                                clicked => {
+                                    root.reveal_result(item.path);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -72,7 +118,7 @@ struct SearchRequest {
 #[derive(Default)]
 struct SearchResponse {
     revision: u64,
-    results: Vec<String>,
+    results: Vec<SearchResult>,
 }
 
 enum WorkerCommand {
@@ -86,7 +132,7 @@ enum WorkerResponse {
         indexed_items: usize,
         indexing_issues: usize,
         indexing_duration: Duration,
-        initial_results: Vec<String>,
+        initial_results: Vec<SearchResult>,
     },
     SearchResults(SearchResponse),
     IndexingFailed(String),
@@ -229,6 +275,15 @@ pub fn run(root: PathBuf) -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     });
 
+    window.on_open_result({
+        let window_weak = window_weak.clone();
+        move |path| open_from_ui(&window_weak, &path, OpenAction::Open)
+    });
+    window.on_reveal_result({
+        let window_weak = window_weak.clone();
+        move |path| open_from_ui(&window_weak, &path, OpenAction::Reveal)
+    });
+
     window.run()?;
     Ok(())
 }
@@ -279,7 +334,7 @@ fn run_search_worker<S: IndexSource + Send + 'static>(
             indexed_items: index.len(),
             indexing_issues: index.indexing_issue_count(),
             indexing_duration: indexing_started.elapsed(),
-            initial_results: index.search("", RESULT_LIMIT),
+            initial_results: index.search_results("", RESULT_LIMIT),
         })
         .is_err()
     {
@@ -309,7 +364,7 @@ fn handle_command(
         WorkerCommand::Search(request) => {
             let response = SearchResponse {
                 revision: request.revision,
-                results: index.search(&request.query, RESULT_LIMIT),
+                results: index.search_results(&request.query, RESULT_LIMIT),
             };
             *latest = request;
             WorkerResponse::SearchResults(response)
@@ -321,7 +376,7 @@ fn handle_command(
                 indexing_issues: index.indexing_issue_count(),
                 refreshed: SearchResponse {
                     revision: latest.revision,
-                    results: index.search(&latest.query, RESULT_LIMIT),
+                    results: index.search_results(&latest.query, RESULT_LIMIT),
                 },
             }
         }
@@ -381,13 +436,93 @@ fn is_volume_root(path: &Path) -> bool {
     is_drive && matches!(components.next(), Some(Component::RootDir)) && components.next().is_none()
 }
 
-fn make_results_model(results: Vec<String>) -> ModelRc<SharedString> {
+fn make_results_model(results: Vec<SearchResult>) -> ModelRc<ResultRow> {
     ModelRc::new(VecModel::from(
         results
             .into_iter()
-            .map(SharedString::from)
+            .map(|result| ResultRow {
+                detail: format_result_detail(&result).into(),
+                title: result.display.into(),
+                path: result.path.into(),
+            })
             .collect::<Vec<_>>(),
     ))
+}
+
+fn describe_attributes(attributes: u32) -> String {
+    let kind = if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        "Folder"
+    } else {
+        "File"
+    };
+    [
+        (FILE_ATTRIBUTE_READONLY, "read-only"),
+        (FILE_ATTRIBUTE_HIDDEN, "hidden"),
+        (FILE_ATTRIBUTE_SYSTEM, "system"),
+    ]
+    .into_iter()
+    .filter(|(flag, _)| attributes & flag != 0)
+    .fold(kind.to_owned(), |description, (_, label)| {
+        format!("{description}, {label}")
+    })
+}
+
+fn format_result_detail(result: &SearchResult) -> String {
+    let kind = describe_attributes(result.attributes);
+    if result.path == result.display {
+        kind
+    } else {
+        format!("{kind} - {}", result.path)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OpenAction {
+    Open,
+    Reveal,
+}
+
+/// Builds the raw Explorer argument; Windows paths cannot contain quotes, so quoting is safe.
+fn explorer_argument(path: &Path, action: OpenAction) -> String {
+    match action {
+        OpenAction::Open => format!("\"{}\"", path.display()),
+        OpenAction::Reveal => format!("/select,\"{}\"", path.display()),
+    }
+}
+
+#[cfg(windows)]
+fn open_in_explorer(path: &Path, action: OpenAction) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    let path = std::path::absolute(path)?;
+    if path.as_os_str().to_string_lossy().contains('"') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "paths containing quotes cannot be passed to Explorer",
+        ));
+    }
+    // Explorer reports a failure exit code even after opening successfully, so only spawning is checked.
+    std::process::Command::new("explorer.exe")
+        .raw_arg(explorer_argument(&path, action))
+        .spawn()
+        .map(drop)
+}
+
+#[cfg(not(windows))]
+fn open_in_explorer(path: &Path, _action: OpenAction) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!("opening {} requires Windows Explorer", path.display()),
+    ))
+}
+
+fn open_from_ui(window_weak: &slint::Weak<MainWindow>, path: &str, action: OpenAction) {
+    if let (Err(error), Some(window)) = (
+        open_in_explorer(Path::new(path), action),
+        window_weak.upgrade(),
+    ) {
+        window.set_status(format!("Could not open {path}: {error}").into());
+    }
 }
 
 fn format_indexing_status(root: &std::path::Path) -> String {
@@ -433,13 +568,65 @@ mod tests {
 
     use crate::search::{
         EntryMetadata, IndexIssue, IndexSource, IndexUpdate, JournalCheckpoint, SearchEntry,
-        SearchIndex, UpdateBatch, WorkspaceSource,
+        SearchIndex, SearchResult, UpdateBatch, WorkspaceSource,
     };
 
     use super::{
-        SearchRequest, WorkerCommand, WorkerResponse, format_index_status, format_indexing_status,
+        OpenAction, SearchRequest, WorkerCommand, WorkerResponse, describe_attributes,
+        explorer_argument, format_index_status, format_indexing_status, format_result_detail,
         format_update_status, handle_command, is_volume_root, poll_updates,
     };
+
+    fn displays(results: &[SearchResult]) -> Vec<&str> {
+        results
+            .iter()
+            .map(|result| result.display.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn describes_files_and_folders_with_their_attributes() {
+        assert_eq!(describe_attributes(0), "File");
+        assert_eq!(describe_attributes(0x0000_0010), "Folder");
+        assert_eq!(
+            describe_attributes(0x0000_0001 | 0x0000_0002 | 0x0000_0004 | 0x0000_0020),
+            "File, read-only, hidden, system",
+        );
+    }
+
+    #[test]
+    fn shows_the_full_path_only_when_it_differs_from_the_display() {
+        let relative = SearchResult {
+            display: r"nested\a.txt".to_owned(),
+            path: r"C:\root\nested\a.txt".to_owned(),
+            attributes: 0,
+        };
+        let absolute = SearchResult {
+            display: r"C:\root\nested".to_owned(),
+            path: r"C:\root\nested".to_owned(),
+            attributes: 0x0000_0010,
+        };
+
+        assert_eq!(
+            format_result_detail(&relative),
+            r"File - C:\root\nested\a.txt"
+        );
+        assert_eq!(format_result_detail(&absolute), "Folder");
+    }
+
+    #[test]
+    fn quotes_paths_for_explorer_and_selects_them_when_revealing() {
+        let path = Path::new(r"C:\Program Files\a,b.txt");
+
+        assert_eq!(
+            explorer_argument(path, OpenAction::Open),
+            r#""C:\Program Files\a,b.txt""#,
+        );
+        assert_eq!(
+            explorer_argument(path, OpenAction::Reveal),
+            r#"/select,"C:\Program Files\a,b.txt""#,
+        );
+    }
 
     #[derive(Default)]
     struct ChangingSource {
@@ -516,7 +703,7 @@ mod tests {
             panic!("a search must be answered with search results");
         };
         assert_eq!(response.revision, 3);
-        assert_eq!(response.results, vec![r"C:\alpha.txt"]);
+        assert_eq!(displays(&response.results), vec![r"C:\alpha.txt"]);
         assert_eq!(latest.query, "alp");
     }
 
@@ -546,7 +733,10 @@ mod tests {
         assert_eq!(indexed_items, 3);
         assert_eq!(indexing_issues, 0);
         assert_eq!(refreshed.revision, 5);
-        assert_eq!(refreshed.results, vec![r"C:\alpha.txt", r"C:\alpine.txt"]);
+        assert_eq!(
+            displays(&refreshed.results),
+            vec![r"C:\alpha.txt", r"C:\alpine.txt"]
+        );
     }
 
     #[test]

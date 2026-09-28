@@ -172,6 +172,7 @@ impl SearchIndex {
     /// Applies the source's changes since the retained checkpoints and returns how many were applied.
     ///
     /// Entries and checkpoints stay unchanged when collecting the updates fails.
+    #[cfg(test)]
     pub fn refresh(&mut self, source: &impl IndexSource) -> io::Result<usize> {
         let batch = UpdateBatch::collect(source, &self.journal_checkpoints)?;
         Ok(self.apply(batch))
@@ -255,26 +256,41 @@ impl SearchIndex {
         &self.journal_checkpoints
     }
 
-    /// Returns up to `limit` displays of entries matching every term of `query`.
+    /// Returns the displays of [`search_results`](Self::search_results).
+    #[cfg(test)]
+    pub fn search(&self, query: &str, limit: usize) -> Vec<String> {
+        self.matching_entries(query, limit)
+            .into_iter()
+            .map(|entry| entry.display.clone())
+            .collect()
+    }
+
+    /// Returns up to `limit` entries matching every term of `query`, with their full paths and attributes.
     ///
     /// Terms are separated by whitespace outside double quotes. `^text` matches file names
     /// starting with `text`, `=text` matches whole file names, `path:text` matches only the
     /// full path, and any other term matches the file name or the path. Matching ignores case.
     /// `sort:relevance|name|path|type`, optionally with a leading `-` to reverse it, orders the
     /// results; ties fall back to relevance and then to the display order.
-    pub fn search(&self, query: &str, limit: usize) -> Vec<String> {
+    pub fn search_results(&self, query: &str, limit: usize) -> Vec<SearchResult> {
+        self.matching_entries(query, limit)
+            .into_iter()
+            .map(|entry| SearchResult {
+                display: entry.display.clone(),
+                path: entry.path.clone(),
+                attributes: entry.metadata.attributes,
+            })
+            .collect()
+    }
+
+    fn matching_entries(&self, query: &str, limit: usize) -> Vec<&SearchEntry> {
         if limit == 0 {
             return Vec::new();
         }
 
         let Query { terms, sort } = parse_query(query);
         if terms.is_empty() && sort == SortOrder::default() {
-            return self
-                .entries
-                .iter()
-                .take(limit)
-                .map(|entry| entry.display.clone())
-                .collect();
+            return self.entries.iter().take(limit).collect();
         }
 
         let mut matches: Vec<(u32, &SearchEntry)> = self
@@ -303,11 +319,16 @@ impl SearchIndex {
         });
         matches.truncate(limit);
 
-        matches
-            .into_iter()
-            .map(|(_, entry)| entry.display.clone())
-            .collect()
+        matches.into_iter().map(|(_, entry)| entry).collect()
     }
+}
+
+/// A matched entry as presented to users: its display text, full path, and file attributes.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SearchResult {
+    pub display: String,
+    pub path: String,
+    pub attributes: u32,
 }
 
 fn upsert_slot(
@@ -628,7 +649,7 @@ mod tests {
 
     use super::{
         EntryMetadata, IndexIssue, IndexSource, IndexUpdate, JournalCheckpoint, SearchEntry,
-        SearchIndex, UpdateBatch, WorkspaceSource, resolve_entry_paths,
+        SearchIndex, SearchResult, UpdateBatch, WorkspaceSource, resolve_entry_paths,
     };
 
     struct TestSource {
@@ -1396,6 +1417,38 @@ mod tests {
     fn treats_unknown_sort_keys_as_search_text() {
         assert!(sort_fixture().search("sort:size", 10).is_empty());
         assert_eq!(sort_fixture().search("sort:", 10).len(), 3);
+    }
+
+    #[test]
+    fn returns_full_paths_and_attributes_with_each_result() {
+        let index = index(vec![
+            directory("nested", r"C:\root\nested"),
+            entry(r"nested\a.txt", r"C:\root\nested\a.txt"),
+        ]);
+
+        assert_eq!(
+            index.search_results("", 10),
+            vec![
+                SearchResult {
+                    display: "nested".to_owned(),
+                    path: r"C:\root\nested".to_owned(),
+                    attributes: 0x0000_0010,
+                },
+                SearchResult {
+                    display: r"nested\a.txt".to_owned(),
+                    path: r"C:\root\nested\a.txt".to_owned(),
+                    attributes: 0,
+                },
+            ],
+        );
+        assert_eq!(
+            index
+                .search_results("a.txt", 10)
+                .into_iter()
+                .map(|result| result.display)
+                .collect::<Vec<_>>(),
+            index.search("a.txt", 10),
+        );
     }
 
     #[test]

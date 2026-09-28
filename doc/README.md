@@ -8,6 +8,9 @@ Rust. It is independent of and not affiliated with Voidtools or Everything.
 ## Current functionality
 
 - A native desktop UI built with [Slint](https://slint.dev/).
+- Each result shows its type (file or folder, plus read-only, hidden, and
+  system attributes) and its full path. Double-clicking a result opens it,
+  and **Show in folder** opens its folder in Explorer with the item selected.
 - Recursive indexing of the directory from which the application is started.
 - Case-insensitive search by file name or path, with multiple terms, prefix,
   exact-name, path-only, and quoted terms (see [Search syntax](#search-syntax)).
@@ -105,7 +108,8 @@ cargo run -- C:\path\to\index
 ```
 
 Without an argument, the current working directory becomes the index root.
-Search results show paths relative to that root.
+Search results show paths relative to that root, with the full path in the
+detail line below each result.
 
 To index a whole NTFS volume and keep it up to date, pass its drive root from
 an elevated terminal:

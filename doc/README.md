@@ -14,7 +14,8 @@ Rust. It is independent of and not affiliated with Voidtools or Everything.
   folder, plus read-only, hidden, and system attributes). Double-clicking a
   result opens it; its context menu can also show it in its folder in
   Explorer or copy its name or full path.
-- Recursive indexing of the directory from which the application is started.
+- Indexing of all local fixed NTFS drives by default, or of one directory or
+  drive given on the command line.
 - Case-insensitive search by file name or path, with multiple terms, prefix,
   exact-name, path-only, and quoted terms (see [Search syntax](#search-syntax)).
 - Source-independent entry metadata for file and parent identifiers, name,
@@ -122,25 +123,29 @@ light, and dark themes. **Help > Search syntax** lists the query syntax.
 
 ## Running the application
 
-Install a supported Rust toolchain, then run the application with an optional
-directory to index:
+Install a supported Rust toolchain, then run the application from an elevated
+terminal:
+
+```powershell
+cargo run
+```
+
+Without an argument, every local fixed drive (such as `C:\` and `D:\`) is
+indexed from its NTFS master file table and kept up to date through its USN
+Change Journal. Drives that are not NTFS-formatted are skipped and reported as
+indexing issues. Raw volume access requires administrator rights; without them
+the window explains this and offers **Restart as administrator** (also in the
+**File** menu), which restarts the application through the UAC prompt.
+
+To index a single directory by walking it (no administrator rights needed), or
+a single drive, pass it as the only argument:
 
 ```powershell
 cargo run -- C:\path\to\index
+cargo run -- D:\
 ```
 
-Without an argument, the current working directory becomes the index root.
 The **Path** column shows each result's containing folder.
-
-To index a whole NTFS volume and keep it up to date, pass its drive root from
-an elevated terminal:
-
-```powershell
-cargo run -- C:\
-```
-
-Raw volume access requires administrator rights. Without them, indexing fails
-with an explicit error instead of falling back to walking the drive.
 
 ## Architecture
 
@@ -150,13 +155,14 @@ with an explicit error instead of falling back to walking the drive.
 | `src/app.rs` | Defines the egui UI, selects the index source, coordinates search requests, and applies background journal updates. |
 | `src/search.rs` | Defines source-independent entry metadata, update contracts, and journal checkpoints; collects workspace entries, stores the index, and ranks queries. |
 | `src/ntfs.rs` | Validates NTFS volume access, enumerates a volume's active master file table records into index entries, records USN journal checkpoints, and composes several validated volumes into one snapshot. |
+| `src/elevation.rs` | Detects whether the process is elevated and restarts it through the UAC prompt. |
 
 ## Current limitations
 
 This is a prototype, not a replacement for Everything:
 
-- It indexes one selected directory or drive at startup rather than all
-  system volumes.
+- It indexes local fixed drives only; removable, network, and non-NTFS
+  drives are not searched.
 - Directory indexing walks the file system recursively, so it can be slow for
   large directories, and it is not updated after startup.
 - The index is not persisted.

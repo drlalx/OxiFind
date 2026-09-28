@@ -1008,6 +1008,17 @@ fn unsupported_platform_error(volume_root: &Path) -> io::Error {
     )
 }
 
+/// Returns the roots of all local fixed drives, such as `C:\`, in drive-letter order.
+#[cfg(windows)]
+pub fn local_fixed_volumes() -> Vec<PathBuf> {
+    windows_volume::local_fixed_volumes()
+}
+
+#[cfg(not(windows))]
+pub fn local_fixed_volumes() -> Vec<PathBuf> {
+    Vec::new()
+}
+
 #[cfg(windows)]
 mod windows_volume {
     use std::{
@@ -1023,8 +1034,8 @@ mod windows_volume {
                 ERROR_INVALID_DRIVE, ERROR_NOT_READY, ERROR_PATH_NOT_FOUND, GENERIC_READ, HANDLE,
             },
             Storage::FileSystem::{
-                CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, GetVolumeInformationW,
-                OPEN_EXISTING,
+                CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, GetLogicalDrives,
+                GetVolumeInformationW, OPEN_EXISTING,
             },
             System::{
                 IO::DeviceIoControl,
@@ -1038,6 +1049,24 @@ mod windows_volume {
     };
 
     use super::{JOURNAL_REASON_MASK, JournalState, MftEnumerationCursor};
+
+    /// `GetDriveTypeW` result for fixed disks, from `WinBase.h`.
+    const DRIVE_FIXED: u32 = 3;
+
+    pub(super) fn local_fixed_volumes() -> Vec<PathBuf> {
+        // SAFETY: GetLogicalDrives has no preconditions.
+        let drives = unsafe { GetLogicalDrives() };
+        (0..26_u8)
+            .filter(|bit| drives & (1 << bit) != 0)
+            .map(|bit| PathBuf::from(format!("{}:\\", char::from(b'A' + bit))))
+            .filter(|root| {
+                let root = HSTRING::from(root.as_os_str());
+                // SAFETY: `root` is a valid NUL-terminated wide string for the call's duration.
+                let drive_type = unsafe { GetDriveTypeW(&root) };
+                drive_type == DRIVE_FIXED
+            })
+            .collect()
+    }
 
     /// Reads the journal records after `start_usn` without waiting for new changes.
     pub(super) fn read_journal_changes(

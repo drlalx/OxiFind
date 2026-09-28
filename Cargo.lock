@@ -1050,15 +1050,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "everything_lite"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui_extras",
- "windows",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2279,6 +2270,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
 dependencies = [
  "ttf-parser",
+]
+
+[[package]]
+name = "oxidex"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui_extras",
+ "windows",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
 use std::{
     error::Error,
-    io,
+    ffi::OsString,
+    fmt, io,
     ops::ControlFlow,
     path::{Component, Path, PathBuf, Prefix},
     sync::mpsc,
@@ -12,7 +13,8 @@ use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 
 use crate::{
-    ntfs::NtfsMftSource,
+    elevation,
+    ntfs::{NtfsMftSource, NtfsMultiVolumeSource, local_fixed_volumes},
     search::{
         IndexSource, JournalCheckpoint, SearchIndex, SearchResult, UpdateBatch, WorkspaceSource,
     },
@@ -190,7 +192,7 @@ enum WorkerResponse {
     UpdateFailed(String),
 }
 
-pub fn run(root: PathBuf) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub fn run(scope: IndexScope) -> Result<(), Box<dyn Error + Send + Sync>> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP_NAME)
@@ -201,10 +203,28 @@ pub fn run(root: PathBuf) -> Result<(), Box<dyn Error + Send + Sync>> {
     eframe::run_native(
         APP_NAME,
         options,
-        Box::new(|creation| Ok(Box::new(SearchApp::new(root, creation.egui_ctx.clone())))),
+        Box::new(|creation| Ok(Box::new(SearchApp::new(scope, creation.egui_ctx.clone())))),
     )
     .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// What the application indexes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum IndexScope {
+    /// Every local fixed drive, read from its master file table.
+    LocalDrives,
+    /// One directory, or one drive when the path is a drive root.
+    Root(PathBuf),
+}
+
+impl fmt::Display for IndexScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LocalDrives => formatter.write_str("all local drives"),
+            Self::Root(root) => write!(formatter, "{}", root.display()),
+        }
+    }
 }
 
 /// Sends worker responses and wakes the UI, so it only repaints when something changed.
@@ -231,7 +251,7 @@ impl ResponseSender {
 }
 
 struct SearchApp {
-    root: PathBuf,
+    scope: IndexScope,
     request_tx: mpsc::Sender<WorkerCommand>,
     response_rx: mpsc::Receiver<WorkerResponse>,
     query: String,
@@ -240,6 +260,8 @@ struct SearchApp {
     selected: Option<usize>,
     latest_revision: u64,
     is_indexing: bool,
+    indexing_failed: bool,
+    is_elevated: bool,
     worker_stopped: bool,
     index_status: String,
     notice: Option<String>,
@@ -253,7 +275,7 @@ struct SearchApp {
 impl Default for SearchApp {
     fn default() -> Self {
         Self {
-            root: PathBuf::new(),
+            scope: IndexScope::Root(PathBuf::new()),
             request_tx: mpsc::channel().0,
             response_rx: mpsc::channel().1,
             query: String::new(),
@@ -262,6 +284,8 @@ impl Default for SearchApp {
             selected: None,
             latest_revision: 0,
             is_indexing: false,
+            indexing_failed: false,
+            is_elevated: false,
             worker_stopped: true,
             index_status: String::new(),
             notice: None,
@@ -274,11 +298,11 @@ impl Default for SearchApp {
 }
 
 impl SearchApp {
-    fn new(root: PathBuf, ctx: egui::Context) -> Self {
+    fn new(scope: IndexScope, ctx: egui::Context) -> Self {
         let (request_tx, request_rx) = mpsc::channel::<WorkerCommand>();
         let (response_tx, response_rx) = mpsc::channel::<WorkerResponse>();
         spawn_search_worker(
-            root.clone(),
+            scope.clone(),
             request_tx.clone(),
             request_rx,
             ResponseSender {
@@ -288,11 +312,12 @@ impl SearchApp {
         );
 
         Self {
-            index_status: format_indexing_status(&root),
-            root,
+            index_status: format_indexing_status(&scope),
+            scope,
             request_tx,
             response_rx,
             is_indexing: true,
+            is_elevated: elevation::is_elevated(),
             worker_stopped: false,
             ..Self::default()
         }
@@ -321,7 +346,7 @@ impl SearchApp {
             } => {
                 self.is_indexing = false;
                 self.index_status = format_index_status(
-                    &self.root,
+                    &self.scope,
                     indexing_duration,
                     indexed_items,
                     indexing_issues,
@@ -338,6 +363,7 @@ impl SearchApp {
             }
             WorkerResponse::IndexingFailed(error) => {
                 self.is_indexing = false;
+                self.indexing_failed = true;
                 self.worker_stopped = true;
                 self.index_status = format!("Indexing failed: {error}");
             }
@@ -435,6 +461,32 @@ impl SearchApp {
         }
     }
 
+    fn restart_as_administrator(&mut self, ctx: &egui::Context) {
+        let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
+        match elevation::restart_elevated(&arguments) {
+            Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Err(error) => {
+                self.notice = Some(format!("Could not restart as administrator: {error}"));
+            }
+        }
+    }
+
+    fn elevation_hint(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(ui.available_height() / 3.0);
+            ui.heading("Administrator rights required");
+            ui.add_space(8.0);
+            ui.label(format!(
+                "Indexing {} reads the NTFS master file table, which Windows only allows for administrators.",
+                self.scope
+            ));
+            ui.add_space(12.0);
+            if ui.button("Restart as administrator").clicked() {
+                self.restart_as_administrator(ui.ctx());
+            }
+        });
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let focus_search = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::F);
         let copy_path = egui::KeyboardShortcut::new(
@@ -458,6 +510,9 @@ impl SearchApp {
         let has_selection = self.selected_row().is_some();
 
         ui.menu_button("File", |ui| {
+            if !self.is_elevated && ui.button("Restart as administrator").clicked() {
+                self.restart_as_administrator(ui.ctx());
+            }
             if ui.button("Exit").clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -704,7 +759,7 @@ impl SearchApp {
             .show(ctx, |ui| {
                 ui.heading(format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")));
                 ui.label("Fast file-name search for Windows.");
-                ui.label(format!("Index root: {}", self.root.display()));
+                ui.label(format!("Index scope: {}", self.scope));
             });
     }
 }
@@ -725,35 +780,44 @@ impl eframe::App for SearchApp {
         if self.show_status_bar {
             egui::Panel::bottom("status_bar").show(ui, |ui| self.status_bar(ui));
         }
-        egui::CentralPanel::default().show(ui, |ui| self.results_table(ui));
+        egui::CentralPanel::default().show(ui, |ui| {
+            if self.indexing_failed && !self.is_elevated {
+                self.elevation_hint(ui);
+            } else {
+                self.results_table(ui);
+            }
+        });
 
         self.dialogs(&ctx);
     }
 }
 
 fn spawn_search_worker(
-    root: PathBuf,
+    scope: IndexScope,
     command_tx: mpsc::Sender<WorkerCommand>,
     command_rx: mpsc::Receiver<WorkerCommand>,
     response_tx: ResponseSender,
 ) {
-    thread::spawn(move || {
+    thread::spawn(move || match scope {
+        IndexScope::LocalDrives => run_search_worker(
+            NtfsMultiVolumeSource::new(local_fixed_volumes()),
+            command_tx,
+            command_rx,
+            response_tx,
+        ),
         // Drive roots require MFT access; a failure is reported instead of falling back to walking.
-        if is_volume_root(&root) {
-            run_search_worker(
-                NtfsMftSource::new(root),
-                command_tx,
-                command_rx,
-                response_tx,
-            );
-        } else {
-            run_search_worker(
-                WorkspaceSource::new(root),
-                command_tx,
-                command_rx,
-                response_tx,
-            );
-        }
+        IndexScope::Root(root) if is_volume_root(&root) => run_search_worker(
+            NtfsMftSource::new(root),
+            command_tx,
+            command_rx,
+            response_tx,
+        ),
+        IndexScope::Root(root) => run_search_worker(
+            WorkspaceSource::new(root),
+            command_tx,
+            command_rx,
+            response_tx,
+        ),
     });
 }
 
@@ -937,19 +1001,18 @@ fn open_in_explorer(path: &Path, _action: OpenAction) -> io::Result<()> {
     ))
 }
 
-fn format_indexing_status(root: &std::path::Path) -> String {
-    format!("Indexing {}...", root.display())
+fn format_indexing_status(scope: impl fmt::Display) -> String {
+    format!("Indexing {scope}...")
 }
 
 fn format_index_status(
-    root: &std::path::Path,
+    scope: impl fmt::Display,
     indexing_duration: Duration,
     indexed_items: usize,
     indexing_issues: usize,
 ) -> String {
     let status = format!(
-        "Indexed {indexed_items} items from {} in {} ms",
-        root.display(),
+        "Indexed {indexed_items} items from {scope} in {} ms",
         indexing_duration.as_millis()
     );
 
@@ -984,10 +1047,10 @@ mod tests {
     };
 
     use super::{
-        OpenAction, ResultRow, ResultSort, SearchApp, SearchRequest, SearchResponse, SortColumn,
-        WorkerCommand, WorkerResponse, describe_attributes, effective_query, explorer_argument,
-        format_index_status, format_indexing_status, format_update_status, handle_command,
-        is_volume_root, poll_updates,
+        IndexScope, OpenAction, ResultRow, ResultSort, SearchApp, SearchRequest, SearchResponse,
+        SortColumn, WorkerCommand, WorkerResponse, describe_attributes, effective_query,
+        explorer_argument, format_index_status, format_indexing_status, format_update_status,
+        handle_command, is_volume_root, poll_updates,
     };
 
     fn displays(results: &[SearchResult]) -> Vec<&str> {
@@ -1357,7 +1420,7 @@ mod tests {
     #[test]
     fn reports_the_index_root_while_initial_indexing_is_in_progress() {
         assert_eq!(
-            format_indexing_status(Path::new(r"C:\search-root")),
+            format_indexing_status(Path::new(r"C:\search-root").display()),
             r"Indexing C:\search-root...",
         );
     }
@@ -1366,7 +1429,7 @@ mod tests {
     fn reports_index_root_and_duration_in_the_startup_status() {
         assert_eq!(
             format_index_status(
-                Path::new(r"C:\search-root"),
+                Path::new(r"C:\search-root").display(),
                 Duration::from_millis(250),
                 12,
                 0
@@ -1378,7 +1441,12 @@ mod tests {
     #[test]
     fn omits_issue_information_when_indexing_completes_without_issues() {
         assert_eq!(
-            format_index_status(Path::new(r"C:\search-root"), Duration::ZERO, 12, 0),
+            format_index_status(
+                Path::new(r"C:\search-root").display(),
+                Duration::ZERO,
+                12,
+                0
+            ),
             r"Indexed 12 items from C:\search-root in 0 ms",
         );
     }
@@ -1386,7 +1454,12 @@ mod tests {
     #[test]
     fn reports_recoverable_indexing_issues_in_the_startup_status() {
         assert_eq!(
-            format_index_status(Path::new(r"C:\search-root"), Duration::ZERO, 12, 2),
+            format_index_status(
+                Path::new(r"C:\search-root").display(),
+                Duration::ZERO,
+                12,
+                2
+            ),
             r"Indexed 12 items from C:\search-root in 0 ms (2 inaccessible paths)",
         );
     }
@@ -1394,8 +1467,20 @@ mod tests {
     #[test]
     fn uses_the_singular_wording_for_one_indexing_issue() {
         assert_eq!(
-            format_index_status(Path::new(r"C:\search-root"), Duration::ZERO, 1, 1),
+            format_index_status(Path::new(r"C:\search-root").display(), Duration::ZERO, 1, 1),
             r"Indexed 1 items from C:\search-root in 0 ms (1 inaccessible path)",
+        );
+    }
+
+    #[test]
+    fn describes_the_local_drive_scope_in_the_status() {
+        assert_eq!(
+            format_indexing_status(IndexScope::LocalDrives),
+            "Indexing all local drives...",
+        );
+        assert_eq!(
+            format_indexing_status(IndexScope::Root(r"D:\".into())),
+            r"Indexing D:\...",
         );
     }
 }

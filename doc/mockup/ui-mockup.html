@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Everything Lite - egui UI mockup</title>
+<style>
+  :root {
+    --bg: #1b1b1f;
+    --panel: #232329;
+    --panel-2: #2b2b33;
+    --border: #36363f;
+    --text: #e6e6eb;
+    --muted: #9a9aa6;
+    --faint: #6c6c78;
+    --accent: #4f8cff;
+    --accent-soft: rgba(79, 140, 255, 0.18);
+    --hover: rgba(255, 255, 255, 0.05);
+    --ok: #3ecf8e;
+    --warn: #f5b942;
+    --folder: #f2c14e;
+    --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  }
+  .light {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --panel-2: #eef0f4;
+    --border: #dcdfe6;
+    --text: #1d1f24;
+    --muted: #5e6470;
+    --faint: #9098a6;
+    --accent: #2f6fe4;
+    --accent-soft: rgba(47, 111, 228, 0.12);
+    --hover: rgba(0, 0, 0, 0.04);
+    --shadow: 0 12px 32px rgba(20, 30, 50, 0.18);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px;
+    font: 13px/1.4 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    background: #0f0f12;
+    color: #cfcfd6;
+  }
+  body.page-light { background: #d9dde4; color: #2a2d33; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .subtitle { margin: 0 0 20px; opacity: 0.75; }
+  .pagehead { display: flex; align-items: flex-start; justify-content: space-between; max-width: 1120px; gap: 16px; }
+  .pagehead .actions { display: flex; gap: 8px; }
+  .toggle {
+    border: 1px solid #555;
+    background: transparent;
+    color: inherit;
+    border-radius: 6px;
+    padding: 6px 12px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  /* Window */
+  .window {
+    width: 1120px;
+    height: 720px;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    position: relative;
+  }
+  .titlebar {
+    height: 36px;
+    display: flex;
+    align-items: center;
+    padding-left: 12px;
+    background: var(--panel);
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .titlebar .logo {
+    width: 16px; height: 16px; border-radius: 4px;
+    background: linear-gradient(135deg, var(--accent), #9b6bff);
+  }
+  .titlebar .spacer { flex: 1; }
+  .winbtn { width: 46px; height: 36px; display: grid; place-items: center; color: var(--muted); }
+  .winbtn.close:hover { background: #c42b1c; color: #fff; }
+
+  /* Menu bar */
+  .menubar {
+    display: flex;
+    gap: 2px;
+    padding: 2px 6px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .menu {
+    padding: 4px 10px;
+    border-radius: 5px;
+    cursor: default;
+    position: relative;
+  }
+  .menu:hover { background: var(--hover); }
+  .menu.open { background: var(--accent-soft); color: var(--accent); }
+  .dropdown {
+    position: absolute;
+    top: 30px;
+    left: 0;
+    min-width: 240px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    padding: 4px;
+    color: var(--text);
+    z-index: 10;
+  }
+  .item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 5px;
+  }
+  .item:hover, .item.hot { background: var(--accent-soft); }
+  .item .check { width: 14px; color: var(--accent); }
+  .item .label { flex: 1; }
+  .item .kbd { color: var(--faint); font-size: 11px; }
+  .item .sub { color: var(--faint); }
+  .sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+  /* Search row */
+  .searchrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px 6px;
+    background: var(--panel);
+  }
+  .search {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 12px;
+    background: var(--bg);
+    border: 1.5px solid var(--accent);
+    border-radius: 8px;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .search .q { flex: 1; font-size: 14px; }
+  .search .q .tok { color: var(--accent); }
+  .caret { display: inline-block; width: 1px; height: 16px; background: var(--text); vertical-align: middle; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .search .clear { color: var(--faint); }
+  .iconbtn {
+    height: 32px; min-width: 32px; padding: 0 8px;
+    display: grid; place-items: center;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .iconbtn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .combo {
+    height: 32px; padding: 0 10px;
+    display: flex; align-items: center; gap: 18px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+
+  /* Filter chips */
+  .chips {
+    display: flex;
+    gap: 6px;
+    padding: 4px 12px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .chip {
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip .n { opacity: 0.7; margin-left: 4px; }
+
+  /* Body */
+  .body { flex: 1; display: flex; min-height: 0; }
+  .sidebar {
+    width: 196px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 10px 8px;
+    overflow: hidden;
+  }
+  .sidebar h4 {
+    margin: 10px 8px 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--faint);
+  }
+  .side {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px; border-radius: 6px;
+  }
+  .side:hover { background: var(--hover); }
+  .side.on { background: var(--accent-soft); }
+  .side .grow { flex: 1; }
+  .side .meta { font-size: 11px; color: var(--faint); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .dot.warn { background: var(--warn); }
+
+  .results { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  thead th {
+    position: sticky; top: 0;
+    text-align: left;
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--panel-2);
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+  thead th.sorted { color: var(--text); }
+  thead th.num, td.num { text-align: right; }
+  tbody td {
+    padding: 5px 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-bottom: 1px solid transparent;
+  }
+  tbody tr:nth-child(even) td { background: rgba(127, 127, 127, 0.04); }
+  tbody tr:hover td { background: var(--hover); }
+  tbody tr.sel td { background: var(--accent-soft); }
+  tbody tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  td .ico { display: inline-block; width: 16px; margin-right: 8px; text-align: center; }
+  td mark { background: transparent; color: var(--accent); font-weight: 600; }
+  td.path, td.num, td.date { color: var(--muted); }
+  .tablewrap { flex: 1; overflow: hidden; }
+
+  /* Status bar */
+  .statusbar {
+    height: 28px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 12px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .statusbar .grow { flex: 1; }
+  .badge {
+    padding: 1px 8px; border-radius: 4px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    font-size: 11px;
+  }
+  .badge.accent { color: var(--accent); border-color: var(--accent); }
+
+  /* Context menu */
+  .ctx { display: none; }
+  .show-ctx .ctx { display: block; }
+  .show-ctx .menu .dropdown { display: none; }
+  .show-ctx .menu.open { background: transparent; color: inherit; }
+  .ctx {
+    position: absolute;
+    left: 380px;
+    top: 272px;
+    width: 250px;
+  }
+
+  /* Spec section */
+  .spec { margin-top: 28px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 1120px; }
+  .spec .card {
+    background: rgba(127, 127, 127, 0.08);
+    border: 1px solid rgba(127, 127, 127, 0.25);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .spec h3 { margin: 0 0 8px; font-size: 13px; }
+  .spec ul { margin: 0; padding-left: 16px; }
+  .spec li { margin: 2px 0; }
+  .spec code { font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; }
+  .mapping { max-width: 1120px; margin-top: 28px; border-collapse: collapse; width: 100%; }
+  .mapping th, .mapping td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(127, 127, 127, 0.25); }
+  .mapping code { font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; }
+  .note { max-width: 1120px; margin-top: 16px; opacity: 0.8; }
+</style>
+</head>
+<body>
+<header class="pagehead">
+  <div>
+    <h1>Everything Lite - egui UI mockup</h1>
+    <p class="subtitle">Target layout for the eframe/egui front end: menu bar, search field with mode toggles, type filters, volume sidebar, sortable result table, and a status bar.</p>
+  </div>
+  <div class="actions">
+    <button class="toggle" type="button" id="overlayToggle">Menu / context menu</button>
+    <button class="toggle" type="button" id="themeToggle">Toggle light / dark</button>
+  </div>
+</header>
+
+<div class="window" id="win">
+  <div class="titlebar">
+    <div class="logo"></div>
+    <span>Everything Lite</span>
+    <div class="spacer"></div>
+    <div class="winbtn">&#x2014;</div>
+    <div class="winbtn">&#x25A1;</div>
+    <div class="winbtn close">&#x2715;</div>
+  </div>
+
+  <div class="menubar">
+    <div class="menu">File</div>
+    <div class="menu">Edit</div>
+    <div class="menu open">View
+      <div class="dropdown">
+        <div class="item"><span class="check">&#x2713;</span><span class="label">Sidebar</span><span class="kbd">Ctrl+B</span></div>
+        <div class="item"><span class="check">&#x2713;</span><span class="label">Filter bar</span><span class="kbd">Ctrl+Shift+F</span></div>
+        <div class="item"><span class="check">&#x2713;</span><span class="label">Status bar</span></div>
+        <div class="item"><span class="check"></span><span class="label">Preview pane</span><span class="kbd">Alt+P</span></div>
+        <div class="sep"></div>
+        <div class="item hot"><span class="check"></span><span class="label">Sort by</span><span class="sub">&#x25B8;</span></div>
+        <div class="item"><span class="check"></span><span class="label">Columns</span><span class="sub">&#x25B8;</span></div>
+        <div class="item"><span class="check"></span><span class="label">Theme</span><span class="sub">&#x25B8;</span></div>
+        <div class="sep"></div>
+        <div class="item"><span class="check"></span><span class="label">Zoom in</span><span class="kbd">Ctrl++</span></div>
+        <div class="item"><span class="check"></span><span class="label">Zoom out</span><span class="kbd">Ctrl+-</span></div>
+        <div class="item"><span class="check"></span><span class="label">Reset zoom</span><span class="kbd">Ctrl+0</span></div>
+        <div class="sep"></div>
+        <div class="item"><span class="check"></span><span class="label">Refresh</span><span class="kbd">F5</span></div>
+      </div>
+      <div class="dropdown" style="left: 242px; top: 178px; min-width: 200px;">
+        <div class="item"><span class="check"></span><span class="label">Relevance</span></div>
+        <div class="item"><span class="check"></span><span class="label">Name</span><span class="kbd">Ctrl+1</span></div>
+        <div class="item"><span class="check"></span><span class="label">Path</span><span class="kbd">Ctrl+2</span></div>
+        <div class="item"><span class="check"></span><span class="label">Size</span><span class="kbd">Ctrl+3</span></div>
+        <div class="item hot"><span class="check">&#x2022;</span><span class="label">Date modified</span><span class="kbd">Ctrl+4</span></div>
+        <div class="item"><span class="check"></span><span class="label">Type</span><span class="kbd">Ctrl+5</span></div>
+        <div class="sep"></div>
+        <div class="item"><span class="check"></span><span class="label">Ascending</span></div>
+        <div class="item"><span class="check">&#x2713;</span><span class="label">Descending</span></div>
+      </div>
+    </div>
+    <div class="menu">Search</div>
+    <div class="menu">Bookmarks</div>
+    <div class="menu">Tools</div>
+    <div class="menu">Help</div>
+  </div>
+
+  <div class="searchrow">
+    <div class="search">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>
+      <div class="q">tmp <span class="tok">path:</span>target<span class="caret"></span></div>
+      <span class="clear">&#x2715;</span>
+    </div>
+    <div class="iconbtn" title="Match case">Aa</div>
+    <div class="iconbtn on" title="Whole word">ab|</div>
+    <div class="iconbtn" title="Match path">\\</div>
+    <div class="iconbtn" title="Regular expression">.*</div>
+    <div class="combo">Everything <span>&#x25BE;</span></div>
+  </div>
+
+  <div class="chips">
+    <span class="chip on">All<span class="n">1,284</span></span>
+    <span class="chip">Folders<span class="n">1,201</span></span>
+    <span class="chip">Documents<span class="n">12</span></span>
+    <span class="chip">Images<span class="n">0</span></span>
+    <span class="chip">Audio<span class="n">0</span></span>
+    <span class="chip">Video<span class="n">0</span></span>
+    <span class="chip">Archives<span class="n">54</span></span>
+    <span class="chip">Executables<span class="n">17</span></span>
+  </div>
+
+  <div class="body">
+    <aside class="sidebar">
+      <h4>Volumes</h4>
+      <div class="side on"><span class="dot"></span><span class="grow">All volumes</span><span class="meta">4.1M</span></div>
+      <div class="side"><span class="dot"></span><span class="grow">C:\ System</span><span class="meta">1.9M</span></div>
+      <div class="side"><span class="dot"></span><span class="grow">D:\ Data</span><span class="meta">2.2M</span></div>
+      <div class="side"><span class="dot warn"></span><span class="grow">E:\ Backup</span><span class="meta">exFAT</span></div>
+      <h4>Bookmarks</h4>
+      <div class="side">&#x2605;<span class="grow">Rust targets</span></div>
+      <div class="side">&#x2605;<span class="grow">Recent logs</span></div>
+      <div class="side">&#x2605;<span class="grow">Large archives</span></div>
+      <h4>History</h4>
+      <div class="side"><span class="grow">ntfs sort:path</span></div>
+      <div class="side"><span class="grow">=Cargo.toml</span></div>
+      <div class="side"><span class="grow">^README</span></div>
+    </aside>
+
+    <section class="results">
+      <div class="tablewrap">
+        <table>
+          <colgroup>
+            <col style="width: 30%"><col style="width: 46%"><col style="width: 9%"><col style="width: 15%">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Path</th>
+              <th class="num">Size</th>
+              <th class="sorted">Date modified &#x25BE;</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>04nULu.temp-archive</td><td class="path">D:\code\VV\vvagent\<mark>target</mark>\debug\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-27 18:04</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>03wWRw.temp-archive</td><td class="path">D:\code\VV\vvagent\<mark>target</mark>\i686-pc-windows-msvc\mock-fast\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-27 17:51</td></tr>
+            <tr class="sel"><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>03vhRz.temp-archive</td><td class="path">D:\code\VV\vvagent\<mark>target</mark>\i686-pc-windows-msvc\debug\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-27 17:49</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>03IV7X.temp-archive</td><td class="path">D:\code\VV\vvagent\<mark>target</mark>\i686-pc-windows-msvc\debug\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-27 17:45</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>03jxsA.temp-archive</td><td class="path">D:\code\my_tools\LibreUI\<mark>target</mark>\debug\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-26 21:12</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>02rWoY.temp-archive</td><td class="path">D:\code\TSS\vynamic_security_rs\ntfsrv\<mark>target</mark>\debug\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-26 16:30</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>02OTwe.temp-archive</td><td class="path">D:\code\VV\vvagent\<mark>target</mark>\debug\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-26 11:02</td></tr>
+            <tr><td><span class="ico" style="color:var(--muted)">&#x25A4;</span>rustc<mark>tmp</mark>-build.log</td><td class="path">D:\code\github\spotifast\<mark>target</mark>\release</td><td class="num">184 KB</td><td class="date">2026-09-25 22:40</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>01ZsVL.temp-archive</td><td class="path">D:\code\VV\VVRD-1143\<mark>target</mark>\i686-pc-windows-msvc\debug\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-25 09:13</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>01uEop.temp-archive</td><td class="path">D:\code\VV\vvagent\<mark>target</mark>\i686-pc-windows-msvc\debug\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-24 15:27</td></tr>
+            <tr><td><span class="ico" style="color:var(--accent)">&#x25C6;</span><mark>tmp</mark>_cleanup.exe</td><td class="path">D:\code\TSS\driver\pci_filter_drv\<mark>target</mark>\x86_64-pc-windows-msvc\release</td><td class="num">1.2 MB</td><td class="date">2026-09-24 10:05</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>01b3ek.temp-archive</td><td class="path">D:\code\TSS\driver\pci_filter_drv\<mark>target</mark>\x86_64-pc-windows-msvc\release\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-23 19:58</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>015jbP.temp-archive</td><td class="path">D:\code\github\spotifast\<mark>target</mark>\release\deps\rustczdgFRN</td><td class="num">&#x2014;</td><td class="date">2026-09-23 08:41</td></tr>
+            <tr><td><span class="ico" style="color:var(--muted)">&#x25A3;</span><mark>tmp</mark>-fixtures.zip</td><td class="path">D:\code\my_tools\everything_rust\<mark>target</mark>\bench</td><td class="num">38.4 MB</td><td class="date">2026-09-22 14:17</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>00rvKt.temp-archive</td><td class="path">D:\code\VV\vvagent\<mark>target</mark>\debug\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-21 12:00</td></tr>
+            <tr><td><span class="ico" style="color:var(--folder)">&#x25A0;</span>.<mark>tmp</mark>00mLfa.temp-archive</td><td class="path">D:\code\TSS\vynamic_security_rs\vs_hub\<mark>target</mark>\x86_64-pc-windows-msvc\release\deps</td><td class="num">&#x2014;</td><td class="date">2026-09-20 09:31</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div class="dropdown ctx">
+    <div class="item hot"><span class="label"><b>Open</b></span><span class="kbd">Enter</span></div>
+    <div class="item"><span class="label">Show in folder</span><span class="kbd">Ctrl+Enter</span></div>
+    <div class="item"><span class="label">Open with&#x2026;</span><span class="sub">&#x25B8;</span></div>
+    <div class="sep"></div>
+    <div class="item"><span class="label">Copy name</span><span class="kbd">Ctrl+Shift+C</span></div>
+    <div class="item"><span class="label">Copy full path</span><span class="kbd">Ctrl+C</span></div>
+    <div class="sep"></div>
+    <div class="item"><span class="label">Add to bookmarks</span></div>
+    <div class="item"><span class="label">Properties</span><span class="kbd">Alt+Enter</span></div>
+  </div>
+
+  <div class="statusbar">
+    <span><b style="color:var(--text)">1,284</b> of 4,107,146 objects</span>
+    <span>2.4 ms</span>
+    <span class="grow"></span>
+    <span><span class="dot" style="display:inline-block;margin-right:6px"></span>C: D: live (USN journal)</span>
+    <span class="badge">1 indexing issue</span>
+    <span class="badge">sort: date modified &#x2193;</span>
+    <span class="badge accent">WHOLE WORD</span>
+  </div>
+</div>
+
+<div class="spec">
+  <div class="card">
+    <h3>File</h3>
+    <ul>
+      <li>New window <code>Ctrl+N</code></li>
+      <li>Open index root&#x2026; <code>Ctrl+O</code></li>
+      <li>Export results&#x2026; <code>Ctrl+S</code></li>
+      <li>Close window <code>Ctrl+W</code></li>
+      <li>Exit <code>Alt+F4</code></li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Edit</h3>
+    <ul>
+      <li>Cut / Copy / Paste</li>
+      <li>Copy full path <code>Ctrl+C</code></li>
+      <li>Copy name <code>Ctrl+Shift+C</code></li>
+      <li>Select all <code>Ctrl+A</code></li>
+      <li>Clear search <code>Esc</code></li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Search</h3>
+    <ul>
+      <li>Match case / Whole word</li>
+      <li>Match path / Regex</li>
+      <li>Filter: All, Folders, Documents, &#x2026;</li>
+      <li>Search syntax help <code>F1</code></li>
+      <li>Clear history</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Bookmarks / Tools / Help</h3>
+    <ul>
+      <li>Add bookmark <code>Ctrl+D</code>, Organize&#x2026;</li>
+      <li>Indexed volumes&#x2026;, Rebuild index</li>
+      <li>Indexing issues&#x2026;, Options <code>Ctrl+P</code></li>
+      <li>Search syntax, About</li>
+    </ul>
+  </div>
+</div>
+
+<table class="mapping">
+  <thead><tr><th>Mockup area</th><th>egui / eframe building block</th></tr></thead>
+  <tbody>
+    <tr><td>Menu bar and drop-downs</td><td><code>TopBottomPanel::top</code> + <code>egui::MenuBar</code>, <code>ui.menu_button</code>, <code>ui.checkbox</code>, nested sub-menus</td></tr>
+    <tr><td>Search field and toggles</td><td><code>TextEdit::singleline</code> with <code>hint_text</code> and focus on start, <code>ui.selectable_label</code> / <code>toggle_value</code> for modes, <code>ComboBox</code> for filter presets</td></tr>
+    <tr><td>Type filter chips</td><td><code>ui.horizontal</code> with <code>selectable_label</code> styled via <code>Frame</code> rounding</td></tr>
+    <tr><td>Volume sidebar</td><td><code>SidePanel::left</code> (resizable, toggled from View menu), <code>CollapsingHeader</code> per section</td></tr>
+    <tr><td>Result table</td><td><code>CentralPanel</code> + <code>egui_extras::TableBuilder</code> with <code>body.rows</code> virtualization, clickable headers for sorting, <code>Response::context_menu</code> per row</td></tr>
+    <tr><td>Status bar</td><td><code>TopBottomPanel::bottom</code>, labels fed from <code>WorkerResponse</code> messages</td></tr>
+    <tr><td>Theme / zoom</td><td><code>ctx.set_visuals</code> (dark / light), <code>ctx.set_zoom_factor</code></td></tr>
+  </tbody>
+</table>
+<p class="note">Size and date-modified columns require size/timestamp metadata in the index, which is not collected yet. Menu entries map to existing features where available (sorting, open, show in folder); the rest are candidates for later milestones.</p>
+
+<script>
+  document.getElementById("themeToggle").addEventListener("click", function () {
+    document.getElementById("win").classList.toggle("light");
+    document.body.classList.toggle("page-light");
+  });
+  document.getElementById("overlayToggle").addEventListener("click", function () {
+    document.getElementById("win").classList.toggle("show-ctx");
+  });
+  // Allows static renders, e.g. ui-mockup.html#light-ctx
+  if (location.hash.includes("light")) {
+    document.getElementById("win").classList.add("light");
+    document.body.classList.add("page-light");
+  }
+  if (location.hash.includes("ctx")) {
+    document.getElementById("win").classList.add("show-ctx");
+  }
+</script>
+</body>
+</html>

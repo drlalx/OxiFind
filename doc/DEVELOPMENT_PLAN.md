@@ -156,6 +156,9 @@ collections leave the checkpoints unchanged and are shown in the status line.
 4. Add cancellation or request coalescing so stale queries never update the UI.
 5. Measure query latency and indexing memory usage against the benchmark
    fixtures.
+6. Replace the Slint UI with an eframe/egui UI following
+   [the UI mockup](mockup/ui-mockup.html): menu bar, search field, result
+   table with sortable columns, row context menu, and status bar.
 
 **Exit criteria:** Common queries update predictably while typing and expose
 enough context for users to select a result.

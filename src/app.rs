@@ -215,23 +215,7 @@ pub fn run(scope: IndexScope) -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-/// What the application indexes.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum IndexScope {
-    /// Every local fixed drive, read from its master file table.
-    LocalDrives,
-    /// One directory, or one drive when the path is a drive root.
-    Root(PathBuf),
-}
-
-impl fmt::Display for IndexScope {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LocalDrives => formatter.write_str("all local drives"),
-            Self::Root(root) => write!(formatter, "{}", root.display()),
-        }
-    }
-}
+pub use crate::engine::IndexScope;
 
 /// Sends worker responses and wakes the UI, so it only repaints when something changed.
 struct ResponseSender {

@@ -20,9 +20,16 @@ windows = { version = "0.62", features = [
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[features]
+default = ["egui-ui", "tui"]
+egui-ui = ["dep:eframe", "dep:egui_extras"]
+tui = ["dep:ratatui", "dep:crossterm"]
+
 [dependencies]
-eframe = "0.36.2"
-egui_extras = "0.36.2"
+eframe = { version = "0.36.2", optional = true }
+egui_extras = { version = "0.36.2", optional = true }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"], optional = true }
+crossterm = { version = "0.29", optional = true }
 notify = "8.2.0"
 
 [lints.clippy]

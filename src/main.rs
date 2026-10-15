@@ -1,36 +1,71 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use oxifind::app;
+use oxifind::backend::{CliConfig, UiBackend, detect_default_ui};
 
-use std::{env, error::Error, ffi::OsString, io, path::PathBuf};
+use std::{env, error::Error};
 
-use app::IndexScope;
+#[cfg(test)]
+use oxifind::engine::IndexScope;
+#[cfg(test)]
+use std::{ffi::OsString, io};
 
 fn main() {
-    let result = index_scope_from_args(env::args_os().skip(1))
-        .map_err(Box::<dyn Error + Send + Sync>::from)
-        .and_then(app::run);
+    let config = match CliConfig::parse(env::args_os().skip(1)) {
+        Ok(cfg) => cfg,
+        Err(error) => {
+            eprintln!("Application failed: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    if config.help_requested {
+        print_usage();
+        return;
+    }
+
+    let ui = config.ui.unwrap_or_else(detect_default_ui);
+
+    let result: Result<(), Box<dyn Error + Send + Sync>> = match ui {
+        #[cfg(feature = "egui-ui")]
+        UiBackend::Egui => oxifind::app::run(config.scope),
+        #[cfg(not(feature = "egui-ui"))]
+        UiBackend::Egui => {
+            eprintln!("Error: The 'egui' GUI backend was not compiled in this binary.");
+            std::process::exit(1);
+        }
+        #[cfg(feature = "tui")]
+        UiBackend::Tui => oxifind::tui::run(config.scope),
+        #[cfg(not(feature = "tui"))]
+        UiBackend::Tui => {
+            eprintln!("Error: The 'tui' Terminal backend was not compiled in this binary.");
+            std::process::exit(1);
+        }
+    };
+
     if let Err(error) = result {
         eprintln!("Application failed: {error}");
         std::process::exit(1);
     }
 }
 
+fn print_usage() {
+    println!(
+        "OxiFind - Fast multiplatform file search engine\n\n\
+         Usage: oxifind [OPTIONS] [INDEX_ROOT]\n\n\
+         Options:\n  \
+           --tui                    Launch Terminal UI (Ratatui)\n  \
+           --gui                    Launch Desktop GUI (egui)\n  \
+           --ui <egui|tui>          Select active UI backend\n  \
+           --help, -h               Show this help message\n\n\
+         Arguments:\n  \
+           [INDEX_ROOT]             Path or drive root to index (defaults to all local drives)"
+    );
+}
+
+#[cfg(test)]
 /// Without an argument every local drive is indexed; otherwise the given directory or drive.
 fn index_scope_from_args(arguments: impl IntoIterator<Item = OsString>) -> io::Result<IndexScope> {
-    let mut arguments = arguments.into_iter();
-    let scope = arguments.next().map_or(IndexScope::LocalDrives, |root| {
-        IndexScope::Root(PathBuf::from(root))
-    });
-
-    if arguments.next().is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Usage: oxifind [INDEX_ROOT]",
-        ));
-    }
-
-    Ok(scope)
+    CliConfig::parse(arguments).map(|config| config.scope)
 }
 
 #[cfg(test)]

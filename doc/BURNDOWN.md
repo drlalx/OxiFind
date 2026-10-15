@@ -122,5 +122,12 @@ row context menu, and a status bar, following the mockup in `doc/mockup`.
 - [x] Multiplatform CI and packaging:
   - GitHub Actions CI matrix for Ubuntu (Linux), Windows, and macOS (`.github/workflows/ci.yml`).
   - Linux `.desktop` desktop entry (`packaging/linux/oxifind.desktop`) and macOS `Info.plist` bundle metadata (`packaging/macos/Info.plist`).
+- [x] Terminal User Interface (TUI) based on Ratatui & Crossterm (similar to OxiDisc):
+  - Modular Cargo features (`egui-ui` & `tui`), headless server builds (`--no-default-features --features tui`).
+  - RAII `TerminalGuard` with safe alternate screen, raw mode, and automatic cleanup on Drop.
+  - Interactive Ratatui interface with instant type-ahead search, mode toggles (Case, Word, Path, Regex), and sortable result table.
+  - Desktop actions: `<Enter>` to open with system handler, `<Ctrl+O>` to reveal in file manager.
+  - Modal dialogs: `<F1/?>` keyboard shortcuts cheat sheet, `<F2>` search scope drive picker.
+  - Test suite expanded to 153 passed tests across 7 test suites, with 0 Clippy issues under strict no-panic policy.
 
 

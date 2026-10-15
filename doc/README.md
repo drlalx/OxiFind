@@ -12,9 +12,11 @@ experience built in Rust with strict quality standards.
 
 ## Current functionality
 
-- A native desktop UI built with [egui](https://github.com/emilk/egui)
-  (eframe), with a menu bar, a search field, a sortable result table, and a
-  status bar (see [Using the window](#using-the-window)).
+- Dual user interface options:
+  - **Desktop GUI** built with [egui](https://github.com/emilk/egui) (eframe), with a menu bar, search field with mode toggles, sortable result table, and status bar (see [Using the window](#using-the-window)).
+  - **Terminal UI (TUI)** built with [ratatui](https://github.com/ratatui/ratatui) and [crossterm](https://github.com/crossterm-rs/crossterm), with instantaneous type-ahead search, vim navigation (`j`/`k`), filter chips, and dialogs.
+  - Modular Cargo features (`egui-ui` and `tui`) enabling lightweight headless server builds (`--no-default-features --features tui`).
+- Automatic interface dispatch (`--tui`, `--gui`, `--ui <backend>`) with automatic fallback to TUI when running in headless environments without a display server.
 - Native desktop integration: opening files with the system default handler,
   and revealing items in the native file manager (Windows Explorer via `/select`,
   Linux FreeDesktop DBus `org.freedesktop.FileManager1.ShowItems` with `xdg-open`

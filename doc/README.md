@@ -1,20 +1,32 @@
-# Everything Lite
+# OxiFind
 
-Everything Lite is an experimental Rust application inspired by
-[Everything](https://www.voidtools.com/), the Windows file search utility. The
-project explores how to build a responsive name-based file search experience in
-Rust. It is independent of and not affiliated with Voidtools or Everything.
+OxiFind is a high-performance, multiplatform Rust application for ultra-fast, responsive name-based file
+search on Windows, Linux, and macOS. The project provides an instantaneous desktop search
+experience built in Rust with strict quality standards.
+
+## Quality & Architecture Policies
+
+- **True Multiplatform Support**: Runs natively on Windows, Linux, and macOS with unified code, modular platform abstractions (`src/platform/`), and native desktop integrations.
+- **Strict No-Panic Policy**: Enforced via Cargo Clippy (`panic = "deny"`, `unwrap_used = "deny"`, `expect_used = "deny"`). Non-test production code relies exclusively on robust, defensive error handling with `Result` and `Option`.
+- **MIT-Compatible Dependencies**: All direct and transitive dependencies are strictly limited to permissive, MIT-compatible open-source licenses, validated on every test run.
 
 ## Current functionality
 
 - A native desktop UI built with [egui](https://github.com/emilk/egui)
   (eframe), with a menu bar, a search field, a sortable result table, and a
   status bar (see [Using the window](#using-the-window)).
+- Native desktop integration: opening files with the system default handler,
+  and revealing items in the native file manager (Windows Explorer via `/select`,
+  Linux FreeDesktop DBus `org.freedesktop.FileManager1.ShowItems` with `xdg-open`
+  fallback, and macOS Finder via `open -R`).
+- High-performance multi-threaded crawler (`DirectorySource`) on Linux and macOS,
+  and raw MFT/USN indexing (`NtfsMftSource`) on Windows.
+- Real-time live filesystem event monitoring across platforms: Windows USN Change
+  Journal for NTFS volumes, and cross-platform filesystem event watching via `notify`
+  for directories on Linux, macOS, and non-NTFS volumes.
 - Each result shows its file name, containing folder, and type (file or
-  folder, plus read-only, hidden, and system attributes). Double-clicking a
-  result opens it; its context menu can also show it in its folder in
-  Explorer or copy its name or full path.
-- Indexing of all local fixed NTFS drives by default, or of one directory or
+  folder, plus read-only, hidden, and system attributes).
+- Indexing of all local fixed drives/filesystems by default, or of one directory or
   drive given on the command line.
 - Case-insensitive search by file name or path, with multiple terms, prefix,
   exact-name, path-only, and quoted terms (see [Search syntax](#search-syntax)).
@@ -59,14 +71,15 @@ Rust. It is independent of and not affiliated with Voidtools or Everything.
   without discarding entries already collected from other volumes, equivalent
   selected roots are indexed only once, and collection fails explicitly only
   when no volume was selected or every selected volume failed.
-- Each completed NTFS snapshot records the USN journal identifier and
-  next-USN position using `FSCTL_QUERY_USN_JOURNAL`; multi-volume snapshots
-  publish a volume only when its matching checkpoint was also recorded.
+- Each NTFS snapshot records the USN journal identifier and next-USN position
+  using `FSCTL_QUERY_USN_JOURNAL` before MFT enumeration, so concurrent changes
+  are replayed after indexing. Multi-volume snapshots publish a volume only
+  when its matching checkpoint and enumeration both succeed.
 - Selecting a drive root such as `C:\` indexes that volume from its master
   file table. A background poller then reads the USN Change Journal once per
-  second and applies creates, renames, moves, and deletes to the running
-  index; a reset, wrapped, or gapped journal rebuilds the volume. Open result
-  lists are refreshed after every applied change batch.
+  second and applies creates, renames, moves, deletes, and attribute changes
+  to the running index; a reset, wrapped, or gapped journal rebuilds the
+  volume. Open result lists are refreshed after every applied change batch.
 
 The recursive workspace index skips `target` and `.git` directories. An empty
 query displays the first 200 indexed entries.
@@ -159,7 +172,7 @@ The **Path** column shows each result's containing folder.
 
 ## Current limitations
 
-This is a prototype, not a replacement for Everything:
+This is a prototype, not a production-ready desktop search tool:
 
 - It indexes local fixed drives only; removable, network, and non-NTFS
   drives are not searched.
@@ -168,15 +181,15 @@ This is a prototype, not a replacement for Everything:
 - The index is not persisted.
 - `NtfsMftSource` requires the elevated privilege that opening a volume for
   raw read access needs. `NtfsMultiVolumeSource` composes several such
-  sources, but the application only selects a single volume. The synthetic
-  MFT and journal replays do not exercise a live volume's contents or
-  elevated raw-read permission; live validation must be run elevated against
-  a known NTFS volume.
+  sources for the default all-local-drives scope. The synthetic MFT and
+  journal replays do not exercise a live volume's contents or elevated
+  raw-read permission; live validation must be run elevated against a known
+  NTFS volume.
 - Regular expressions, attribute filters, and content-based search are not
   implemented.
 
 ## Planned direction
 
-The intended next steps are to select several volumes in the application,
-add search syntax while preserving fast, low-overhead interactive results,
-and persist index snapshots with their journal checkpoints.
+The intended next steps are to select explicit subsets of volumes in the
+application, expand the search syntax while preserving fast, low-overhead
+interactive results, and persist index snapshots with their journal checkpoints.

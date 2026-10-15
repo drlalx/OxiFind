@@ -101,3 +101,26 @@ result opens it, and **Show in folder** opens Explorer with the item selected.
 
 The UI now uses eframe/egui with a menu bar, a sortable result table with a
 row context menu, and a status bar, following the mockup in `doc/mockup`.
+
+## Multiplatform (Windows, Linux, macOS)
+
+- [x] Clippy No-Panic Policy: `panic = "deny"`, `unwrap_used = "deny"`, etc. in `Cargo.toml`.
+- [x] MIT-Compatible License Policy: `deny.toml` and automated test `tests/license_compliance.rs` passing (430 direct/transitive dependencies verified).
+- [x] Cross-platform path harmonization in `search.rs`, `app.rs`, and `ntfs.rs` (100% test pass rate on Linux and Windows).
+- [x] Platform abstraction layer (`src/platform/`):
+  - `desktop.rs`: `open_path` (Open & Reveal) via Windows Explorer, Linux DBus `org.freedesktop.FileManager1.ShowItems` + `xdg-open`, and macOS `open -R`.
+  - `elevation.rs`: Elevation check and restart via Windows `TOKEN_ELEVATION`/`runas`, Linux `libc::geteuid()`/`pkexec`, and macOS `osascript`.
+  - `mounts.rs`: Mount detection via Linux `/proc/mounts`, macOS `/Volumes`, and system path exclusions (`/proc`, `/sys`, `/dev`, `/run`, `/tmp`, etc.).
+- [x] Native multi-threaded directory indexing (`src/crawler.rs`):
+  - Parallel work-stealing crawler (`DirectorySource`) indexing local drives or targeted directories.
+  - Multiplatform file attributes (Directory, ReparsePoint/Symlink, ReadOnly, Hidden dotfiles).
+  - Immunity to symlink cycles and graceful recovery from permission denied (`EACCES`).
+- [x] Platform event-based directory monitoring (`src/watcher.rs`):
+  - Cross-platform filesystem event watcher via `notify` with batch draining and atomic `UpdateBatch` application.
+  - Removal by path (`IndexUpdate::RemovePath`) and upserting created/modified files without restarts.
+  - Total test suite: 140 passed across 5 suites with 100% pass rate.
+- [x] Multiplatform CI and packaging:
+  - GitHub Actions CI matrix for Ubuntu (Linux), Windows, and macOS (`.github/workflows/ci.yml`).
+  - Linux `.desktop` desktop entry (`packaging/linux/oxifind.desktop`) and macOS `Info.plist` bundle metadata (`packaging/macos/Info.plist`).
+
+

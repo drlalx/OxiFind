@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=OxiFind
+GenericName=File Search
+Comment=Ultra-fast multiplatform file search tool
+Exec=oxifind %F
+Icon=oxifind
+Terminal=false
+Type=Application
+Categories=Utility;Filesystem;Core;
+Keywords=search;find;everything;files;mft;
+StartupNotify=true
+MimeType=inode/directory;

@@ -5,7 +5,7 @@
 Build a Windows desktop file-name search tool in Rust that provides fast,
 interactive results from a maintained local index. The implementation should
 remain independent and should not reuse code or proprietary data from
-Everything.
+external search tools.
 
 ## Principles
 
@@ -220,5 +220,5 @@ without requiring manual index management.
 - File-content indexing.
 - Network-share indexing.
 - Cloud synchronization.
-- Compatibility with Everything's APIs, database format, or query language.
+- Compatibility with external search tools and their data formats.
 - Non-Windows file-system metadata sources beyond the existing directory walker.

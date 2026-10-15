@@ -1,7 +1,6 @@
-mod app;
-mod elevation;
-mod ntfs;
-mod search;
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
+use oxifind::app;
 
 use std::{env, error::Error, ffi::OsString, io, path::PathBuf};
 
@@ -27,7 +26,7 @@ fn index_scope_from_args(arguments: impl IntoIterator<Item = OsString>) -> io::R
     if arguments.next().is_some() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "Usage: oxidex [INDEX_ROOT]",
+            "Usage: oxifind [INDEX_ROOT]",
         ));
     }
 

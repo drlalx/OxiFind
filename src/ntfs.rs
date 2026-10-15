@@ -1,8 +1,10 @@
+#![cfg_attr(not(windows), allow(dead_code))]
+
 use std::{
     cell::RefCell,
     collections::HashSet,
     io,
-    path::{Component, Path, PathBuf, Prefix},
+    path::{Path, PathBuf},
 };
 
 use crate::search::{
@@ -103,12 +105,15 @@ const USN_REASON_FILE_DELETE: u32 = 0x0000_0200;
 const USN_REASON_FILE_CREATE: u32 = 0x0000_0100;
 const USN_REASON_RENAME_OLD_NAME: u32 = 0x0000_1000;
 const USN_REASON_RENAME_NEW_NAME: u32 = 0x0000_2000;
+const USN_REASON_BASIC_INFO_CHANGE: u32 = 0x0000_8000;
 
-/// Journal reasons that change which names exist where; content changes do not affect the index.
+/// Journal reasons that change names, locations, or attributes; content changes do not affect the index.
+#[cfg_attr(not(windows), allow(dead_code))]
 const JOURNAL_REASON_MASK: u32 = USN_REASON_FILE_CREATE
     | USN_REASON_FILE_DELETE
     | USN_REASON_RENAME_OLD_NAME
-    | USN_REASON_RENAME_NEW_NAME;
+    | USN_REASON_RENAME_NEW_NAME
+    | USN_REASON_BASIC_INFO_CHANGE;
 
 /// A file reference number packs the MFT record index into its low 48 bits
 /// and a reuse sequence number into its high 16 bits. The complete value
@@ -171,6 +176,7 @@ impl<I: VolumeInspector, E: MftRecordEnumerator> NtfsMftSource<I, E> {
     }
 }
 
+#[cfg(test)]
 impl<I, E, J> NtfsMftSource<I, E, J> {
     /// Creates a source with an injected journal reader for deterministic
     /// checkpoint tests.
@@ -189,14 +195,8 @@ impl<I, E, J> NtfsMftSource<I, E, J> {
     }
 }
 
-impl<I: VolumeInspector, E: MftRecordEnumerator, J: JournalCheckpointReader> IndexSource
-    for NtfsMftSource<I, E, J>
-{
-    fn collect_initial(
-        &self,
-        out: &mut Vec<SearchEntry>,
-        issues: &mut Vec<IndexIssue>,
-    ) -> io::Result<()> {
+impl<I: VolumeInspector, E: MftRecordEnumerator, J> NtfsMftSource<I, E, J> {
+    fn validated_volume_root(&self) -> io::Result<PathBuf> {
         let volume_root = volume_root_path(&self.volume)?;
 
         let filesystem = self.inspector.filesystem_name(&volume_root)?;
@@ -211,9 +211,17 @@ impl<I: VolumeInspector, E: MftRecordEnumerator, J: JournalCheckpointReader> Ind
         }
 
         self.inspector.check_read_access(&volume_root)?;
+        Ok(volume_root)
+    }
 
-        let mut cursor = self.enumerator.open(&volume_root)?;
-        let collected = collect_records(&volume_root, cursor.as_mut(), out, issues)?;
+    fn collect_volume_entries(
+        &self,
+        volume_root: &Path,
+        out: &mut Vec<SearchEntry>,
+        issues: &mut Vec<IndexIssue>,
+    ) -> io::Result<()> {
+        let mut cursor = self.enumerator.open(volume_root)?;
+        let collected = collect_records(volume_root, cursor.as_mut(), out, issues)?;
         if collected == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -225,6 +233,30 @@ impl<I: VolumeInspector, E: MftRecordEnumerator, J: JournalCheckpointReader> Ind
         }
 
         Ok(())
+    }
+}
+
+impl<I: VolumeInspector, E: MftRecordEnumerator, J: JournalCheckpointReader> IndexSource
+    for NtfsMftSource<I, E, J>
+{
+    fn collect_initial(
+        &self,
+        out: &mut Vec<SearchEntry>,
+        issues: &mut Vec<IndexIssue>,
+    ) -> io::Result<()> {
+        let volume_root = self.validated_volume_root()?;
+        self.collect_volume_entries(&volume_root, out, issues)
+    }
+
+    fn collect_snapshot(
+        &self,
+        out: &mut Vec<SearchEntry>,
+        issues: &mut Vec<IndexIssue>,
+    ) -> io::Result<Vec<JournalCheckpoint>> {
+        let volume_root = self.validated_volume_root()?;
+        let state = self.journal_reader.read_state(&volume_root)?;
+        self.collect_volume_entries(&volume_root, out, issues)?;
+        Ok(vec![checkpoint_at(&volume_root, state)])
     }
 
     fn journal_checkpoints(&self) -> io::Result<Vec<JournalCheckpoint>> {
@@ -345,6 +377,7 @@ impl
     }
 }
 
+#[cfg(test)]
 impl<I, E, J> NtfsMultiVolumeSource<I, E, J> {
     /// Creates a source from already-constructed single-volume sources.
     ///
@@ -400,25 +433,13 @@ impl<I: VolumeInspector, E: MftRecordEnumerator, J: JournalCheckpointReader> Ind
             let mut volume_entries: Vec<SearchEntry> = Vec::new();
             let mut volume_issues: Vec<IndexIssue> = Vec::new();
 
-            match source.collect_initial(&mut volume_entries, &mut volume_issues) {
-                Ok(()) => match source.journal_checkpoints() {
-                    Ok(mut checkpoint) => {
-                        out.append(&mut volume_entries);
-                        issues.append(&mut volume_issues);
-                        journal_checkpoints.append(&mut checkpoint);
-                        indexed_volumes += 1;
-                    }
-                    Err(error) => {
-                        failed_volumes.push(source.volume.display().to_string());
-                        issues.push(IndexIssue {
-                                path: source.volume.clone(),
-                                message: format!(
-                                    "Volume {} was indexed but its USN journal checkpoint could not be recorded: {error}",
-                                    source.volume.display()
-                                ),
-                            });
-                    }
-                },
+            match source.collect_snapshot(&mut volume_entries, &mut volume_issues) {
+                Ok(mut checkpoint) => {
+                    out.append(&mut volume_entries);
+                    issues.append(&mut volume_issues);
+                    journal_checkpoints.append(&mut checkpoint);
+                    indexed_volumes += 1;
+                }
                 Err(error) => {
                     failed_volumes.push(source.volume.display().to_string());
                     issues.push(IndexIssue {
@@ -444,6 +465,15 @@ impl<I: VolumeInspector, E: MftRecordEnumerator, J: JournalCheckpointReader> Ind
 
         self.journal_checkpoints.replace(journal_checkpoints);
         Ok(())
+    }
+
+    fn collect_snapshot(
+        &self,
+        out: &mut Vec<SearchEntry>,
+        issues: &mut Vec<IndexIssue>,
+    ) -> io::Result<Vec<JournalCheckpoint>> {
+        self.collect_initial(out, issues)?;
+        self.journal_checkpoints()
     }
 
     fn journal_checkpoints(&self) -> io::Result<Vec<JournalCheckpoint>> {
@@ -523,7 +553,7 @@ fn collect_journal_updates<J: JournalCheckpointReader>(
     Ok(())
 }
 
-/// Translates one journal record into an index change, or `None` when it does not affect names.
+/// Translates one journal record into an index change, or `None` when it does not affect names or attributes.
 fn journal_update(record: &UsnRecord, volume_root: &Path) -> Option<IndexUpdate> {
     if record.reason & USN_REASON_FILE_DELETE != 0 {
         return Some(IndexUpdate::Remove {
@@ -535,8 +565,9 @@ fn journal_update(record: &UsnRecord, volume_root: &Path) -> Option<IndexUpdate>
     // An old-name record describes where the file was; its new-name record follows.
     let names_previous_location = record.reason & USN_REASON_RENAME_OLD_NAME != 0
         && record.reason & USN_REASON_RENAME_NEW_NAME == 0;
-    let names_current_location =
-        record.reason & (USN_REASON_FILE_CREATE | USN_REASON_RENAME_NEW_NAME) != 0;
+    let names_current_location = record.reason
+        & (USN_REASON_FILE_CREATE | USN_REASON_RENAME_NEW_NAME | USN_REASON_BASIC_INFO_CHANGE)
+        != 0;
 
     (names_current_location && !names_previous_location)
         .then(|| IndexUpdate::Upsert(entry_for(record, volume_root)))
@@ -645,9 +676,14 @@ fn collect_records(
 /// the shared parent-child resolver, so the entry only has to carry the
 /// record's own name until its lineage is known.
 fn entry_for(record: &UsnRecord, volume_root: &Path) -> SearchEntry {
+    if record.file_reference & FILE_REFERENCE_INDEX_MASK == ROOT_RECORD_INDEX {
+        return root_entry(volume_root, record.file_reference, record.attributes);
+    }
+
     SearchEntry {
         display: record.name.clone(),
         path: record.name.clone(),
+        path_resolved: false,
         metadata: EntryMetadata {
             file_id: Some(u128::from(record.file_reference)),
             parent_id: Some(u128::from(record.parent_reference)),
@@ -672,6 +708,7 @@ fn root_entry(volume_root: &Path, file_reference: u64, attributes: u32) -> Searc
     SearchEntry {
         display: name.clone(),
         path: name.clone(),
+        path_resolved: true,
         metadata: EntryMetadata {
             file_id: Some(u128::from(file_reference)),
             parent_id: None,
@@ -835,8 +872,11 @@ fn parse_record(record: &[u8]) -> Result<UsnRecord, String> {
 /// unpaired surrogates are replaced instead of rejecting the record.
 fn decode_utf16(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|unit| u16::from_le_bytes([unit[0], unit[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .copied()
+        .map(u16::from_le_bytes)
         .collect();
     String::from_utf16_lossy(&units)
 }
@@ -846,23 +886,65 @@ fn decode_utf16(bytes: &[u8]) -> String {
 /// local drive, such as relative paths or UNC network shares, which are out
 /// of scope for MFT-based indexing.
 fn volume_root_path(path: &Path) -> io::Result<PathBuf> {
-    match path.components().next() {
-        Some(Component::Prefix(prefix)) => match prefix.kind() {
-            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
-                Ok(PathBuf::from(format!("{}:\\", letter as char)))
-            }
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+
+        match path.components().next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                    Ok(PathBuf::from(format!("{}:\\", letter as char)))
+                }
+                _ => Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("{} does not name a local drive volume", path.display()),
+                )),
+            },
             _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{} has no drive letter to identify a volume",
+                    path.display()
+                ),
+            )),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let lossy = path.to_string_lossy();
+        if let Some(rest) = lossy.strip_prefix(r"\\?\") {
+            let bytes = rest.as_bytes();
+            if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+                return Ok(PathBuf::from(format!(
+                    "{}:\\",
+                    (bytes[0] as char).to_ascii_uppercase()
+                )));
+            }
+            return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 format!("{} does not name a local drive volume", path.display()),
-            )),
-        },
-        _ => Err(io::Error::new(
+            ));
+        }
+        if lossy.starts_with(r"\\") {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("{} does not name a local drive volume", path.display()),
+            ));
+        }
+        let bytes = lossy.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            return Ok(PathBuf::from(format!(
+                "{}:\\",
+                (bytes[0] as char).to_ascii_uppercase()
+            )));
+        }
+        Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
                 "{} has no drive letter to identify a volume",
                 path.display()
             ),
-        )),
+        ))
     }
 }
 
@@ -1415,15 +1497,19 @@ mod tests {
     use std::{
         cell::{Cell, RefCell},
         collections::VecDeque,
-        fs, io,
+        io,
         path::{Path, PathBuf},
         rc::Rc,
+    };
+    #[cfg(windows)]
+    use std::{
+        fs,
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use crate::search::{
-        IndexUpdate, JournalCheckpoint, SearchIndex, WorkspaceSource, resolve_entry_paths,
-    };
+    #[cfg(windows)]
+    use crate::search::WorkspaceSource;
+    use crate::search::{IndexUpdate, JournalCheckpoint, SearchIndex, resolve_entry_paths};
 
     use super::{
         IndexIssue, IndexSource, JournalCheckpointReader, JournalState, MftEnumerationCursor,
@@ -1441,6 +1527,7 @@ mod tests {
     const CREATE_REASON: u32 = 0x0000_0100;
     const RENAME_OLD_NAME_REASON: u32 = 0x0000_1000;
     const RENAME_NEW_NAME_REASON: u32 = 0x0000_2000;
+    const BASIC_INFO_CHANGE_REASON: u32 = 0x0000_8000;
     const CLOSE_REASON: u32 = 0x8000_0000;
 
     /// File reference numbers combine a reuse sequence number in the high 16
@@ -1449,6 +1536,7 @@ mod tests {
     const PROJECTS_REFERENCE: u64 = 0x0001_0000_0000_002a;
     const NOTES_REFERENCE: u64 = 0x0002_0000_0000_002b;
     const ALPHA_REFERENCE: u64 = 0x0001_0000_0000_0100;
+    #[cfg(windows)]
     const NESTED_REFERENCE: u64 = 0x0001_0000_0000_0101;
     const BRAVO_REFERENCE: u64 = 0x0001_0000_0000_0102;
     const ROOT_ID: u128 = ROOT_REFERENCE as u128;
@@ -1599,6 +1687,7 @@ mod tests {
         chunks: VecDeque<io::Result<Vec<u8>>>,
         starts: Vec<u64>,
         opened: usize,
+        journal_advance: Option<FakeJournal>,
     }
 
     /// Deterministic [`MftRecordEnumerator`] fake that replays prepared
@@ -1626,6 +1715,11 @@ mod tests {
             enumerator
         }
 
+        fn with_journal_advance(self, journal: FakeJournal) -> Self {
+            self.state.borrow_mut().journal_advance = Some(journal);
+            self
+        }
+
         fn starts(&self) -> Vec<u64> {
             self.state.borrow().starts.clone()
         }
@@ -1638,6 +1732,13 @@ mod tests {
     impl MftRecordEnumerator for FakeEnumerator {
         fn open(&self, _volume_root: &Path) -> io::Result<Box<dyn MftEnumerationCursor>> {
             self.state.borrow_mut().opened += 1;
+            if let Some(journal) = &self.state.borrow().journal_advance {
+                let state = journal.state.get();
+                journal.set_state(JournalState {
+                    next_usn: state.next_usn + 1,
+                    ..state
+                });
+            }
             Ok(Box::new(FakeCursor {
                 state: Rc::clone(&self.state),
             }))
@@ -1811,6 +1912,63 @@ mod tests {
         );
     }
 
+    fn source_with_snapshot_rename(
+        volume: &str,
+    ) -> NtfsMftSource<FakeVolumeInspector, FakeEnumerator, FakeJournal> {
+        let journal = FakeJournal::with_changes(vec![chunk(
+            85,
+            &[
+                FakeRecord::new(NOTES_REFERENCE, PROJECTS_REFERENCE, "renamed.txt")
+                    .with_reason(RENAME_NEW_NAME_REASON),
+            ],
+        )]);
+        NtfsMftSource::with_parts_and_journal(
+            volume,
+            FakeVolumeInspector::new("NTFS"),
+            FakeEnumerator::with_chunks(vec![volume_tree_chunk()])
+                .with_journal_advance(journal.clone()),
+            journal,
+        )
+    }
+
+    fn assert_snapshot_rename_is_replayed(source: &impl IndexSource) {
+        let mut index = SearchIndex::from_source(source).unwrap();
+        let volume_count = index.journal_checkpoints().len();
+        assert!(volume_count > 0);
+        for checkpoint in index.journal_checkpoints() {
+            assert_eq!(checkpoint.next_usn, 84);
+        }
+
+        index.refresh(source).unwrap();
+
+        let results = index.search_results("=renamed.txt", 10);
+        assert_eq!(results.len(), volume_count);
+        assert!(
+            results
+                .iter()
+                .all(|result| is_path_absolute(&result.path))
+        );
+    }
+
+    fn is_path_absolute(path: &str) -> bool {
+        Path::new(path).is_absolute()
+            || (path.len() >= 3 && path.as_bytes()[1] == b':' && (path.as_bytes()[2] == b'\\' || path.as_bytes()[2] == b'/'))
+    }
+
+    #[test]
+    fn retains_the_checkpoint_before_single_volume_enumeration() {
+        assert_snapshot_rename_is_replayed(&source_with_snapshot_rename(r"C:\"));
+    }
+
+    #[test]
+    fn retains_the_checkpoint_before_multi_volume_enumeration() {
+        let source = NtfsMultiVolumeSource::with_sources(vec![
+            source_with_snapshot_rename(r"C:\"),
+            source_with_snapshot_rename(r"D:\"),
+        ]);
+        assert_snapshot_rename_is_replayed(&source);
+    }
+
     #[test]
     fn records_journal_checkpoints_for_each_completed_multi_volume_index() {
         let c_drive = NtfsMftSource::with_parts_and_journal(
@@ -1899,6 +2057,7 @@ mod tests {
                 volume_identity,
                 file_id,
             } => format!("remove {file_id} on {volume_identity}"),
+            IndexUpdate::RemovePath(path) => format!("remove path {path}"),
             IndexUpdate::ReplaceVolume {
                 volume_identity,
                 entries,
@@ -2044,6 +2203,100 @@ mod tests {
     }
 
     #[test]
+    fn includes_basic_info_changes_in_the_journal_reason_mask() {
+        assert_eq!(
+            super::JOURNAL_REASON_MASK & BASIC_INFO_CHANGE_REASON,
+            BASIC_INFO_CHANGE_REASON,
+        );
+    }
+
+    #[test]
+    fn refreshes_attributes_from_basic_info_journal_changes() {
+        let journal = FakeJournal::default();
+        let source = journal_source(r"C:\", journal.clone());
+        let mut index = SearchIndex::from_source(&source).unwrap();
+        let original = index.search_results("notes", 1).pop().unwrap();
+        let name = {
+            let lossy = original.path.trim_end_matches(['/', '\\']);
+            if let Some(pos) = lossy.rfind(['/', '\\']) {
+                &lossy[pos + 1..]
+            } else {
+                lossy
+            }
+        };
+
+        for (next_usn, attributes) in [(100, 0x0000_0007), (200, 0)] {
+            journal.changes.borrow_mut().push_back(chunk(
+                next_usn,
+                &[FakeRecord::new(NOTES_REFERENCE, PROJECTS_REFERENCE, name)
+                    .with_reason(BASIC_INFO_CHANGE_REASON)
+                    .with_attributes(attributes)],
+            ));
+            journal.set_state(JournalState {
+                next_usn: next_usn as i64,
+                ..journal.state.get()
+            });
+
+            assert_eq!(index.refresh(&source).unwrap(), 1);
+            let result = index.search_results("notes", 1).pop().unwrap();
+            assert_eq!(result.attributes, attributes);
+            assert_eq!(result.path, original.path);
+            assert!(result.path_resolved);
+            assert_eq!(index.indexing_issue_count(), 0);
+        }
+    }
+
+    #[test]
+    fn preserves_the_volume_root_when_refreshing_basic_info_changes() {
+        let attributes = DIRECTORY_ATTRIBUTE | 0x0000_0007;
+        let journal = FakeJournal::with_changes(vec![chunk(
+            100,
+            &[FakeRecord::new(ROOT_REFERENCE, ROOT_REFERENCE, ".")
+                .with_reason(BASIC_INFO_CHANGE_REASON)
+                .with_attributes(attributes)],
+        )]);
+        let source = journal_source(r"C:\", journal);
+        let mut index = SearchIndex::from_source(&source).unwrap();
+        let original_paths = index.search("", 10);
+
+        assert_eq!(index.refresh(&source).unwrap(), 1);
+        assert_eq!(index.search("", 10), original_paths);
+        let results = index.search_results("", 10);
+        let root = results.iter().find(|result| result.path == r"C:\").unwrap();
+        assert_eq!(root.attributes, attributes);
+        assert!(results.iter().all(|result| result.path_resolved));
+        assert_eq!(index.indexing_issue_count(), 0);
+    }
+
+    #[test]
+    fn preserves_delete_and_rename_old_name_semantics_for_basic_info_changes() {
+        let journal = FakeJournal::with_changes(vec![chunk(
+            200,
+            &[
+                FakeRecord::new(ALPHA_REFERENCE, ROOT_REFERENCE, "old.txt")
+                    .with_reason(RENAME_OLD_NAME_REASON | BASIC_INFO_CHANGE_REASON),
+                FakeRecord::new(NOTES_REFERENCE, PROJECTS_REFERENCE, "notes.txt")
+                    .with_reason(DELETE_REASON | BASIC_INFO_CHANGE_REASON),
+            ],
+        )]);
+        let source = journal_source(r"C:\", journal);
+        let mut checkpoints = vec![c_drive_checkpoint()];
+        let mut updates = Vec::new();
+        let mut issues = Vec::new();
+
+        source
+            .collect_updates(&mut checkpoints, &mut updates, &mut issues)
+            .unwrap();
+
+        assert!(issues.is_empty());
+        assert_eq!(
+            updates.iter().map(describe).collect::<Vec<_>>(),
+            vec![format!("remove {NOTES_ID} on C:\\")],
+        );
+        assert_eq!(checkpoints[0].next_usn, 200);
+    }
+
+    #[test]
     fn refreshes_an_ntfs_index_with_moved_created_and_deleted_files() {
         let journal = FakeJournal::with_changes(vec![chunk(
             160,
@@ -2143,10 +2396,12 @@ mod tests {
     }
 
     #[derive(Default)]
+    #[cfg(windows)]
     struct TemporaryDirectory {
         path: PathBuf,
     }
 
+    #[cfg(windows)]
     impl TemporaryDirectory {
         fn new() -> Self {
             let unique = SystemTime::now()
@@ -2154,7 +2409,7 @@ mod tests {
                 .expect("the system clock must be after the Unix epoch")
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "everything-lite-mft-comparison-{}-{unique}",
+                "oxifind-mft-comparison-{}-{unique}",
                 std::process::id()
             ));
             fs::create_dir(&path).expect("the test temporary directory must be created");
@@ -2166,6 +2421,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     impl Drop for TemporaryDirectory {
         fn drop(&mut self) {
             if self.path.is_dir() {
@@ -2175,6 +2431,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn mft_and_workspace_sources_reconstruct_matching_nested_entries() {
         let temporary_directory = TemporaryDirectory::new();
         let root = temporary_directory.path();

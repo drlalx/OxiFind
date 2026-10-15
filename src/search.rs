@@ -11,25 +11,34 @@ const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 pub struct SearchEntry {
     pub display: String,
     pub path: String,
+    pub path_resolved: bool,
     pub metadata: EntryMetadata,
 }
 
 impl SearchEntry {
     pub fn from_path(display: String, path: PathBuf) -> Self {
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let name = path_file_name(&path);
 
         Self {
             display,
             path: path.display().to_string(),
+            path_resolved: true,
             metadata: EntryMetadata {
                 name,
                 full_path: path,
                 ..EntryMetadata::default()
             },
         }
+    }
+}
+
+fn path_file_name(path: &Path) -> String {
+    let lossy = path.to_string_lossy();
+    let trimmed = lossy.trim_end_matches(['/', '\\']);
+    if let Some(pos) = trimmed.rfind(['/', '\\']) {
+        trimmed[pos + 1..].to_owned()
+    } else {
+        trimmed.to_owned()
     }
 }
 
@@ -63,6 +72,8 @@ pub enum IndexUpdate {
         volume_identity: String,
         file_id: u128,
     },
+    /// Removes an entry matching a specific path.
+    RemovePath(String),
     /// Replaces every entry of a volume with a freshly collected snapshot.
     ReplaceVolume {
         volume_identity: String,
@@ -76,6 +87,16 @@ pub trait IndexSource {
         out: &mut Vec<SearchEntry>,
         issues: &mut Vec<IndexIssue>,
     ) -> io::Result<()>;
+
+    fn collect_snapshot(
+        &self,
+        out: &mut Vec<SearchEntry>,
+        issues: &mut Vec<IndexIssue>,
+    ) -> io::Result<Vec<JournalCheckpoint>> {
+        let checkpoints = self.journal_checkpoints()?;
+        self.collect_initial(out, issues)?;
+        Ok(checkpoints)
+    }
 
     /// Appends the changes recorded after each checkpoint in order and advances the checkpoints past them.
     fn collect_updates(
@@ -95,10 +116,12 @@ pub trait IndexSource {
     }
 }
 
+#[allow(dead_code)]
 pub struct WorkspaceSource {
     root: PathBuf,
 }
 
+#[allow(dead_code)]
 impl WorkspaceSource {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
@@ -157,10 +180,9 @@ impl SearchIndex {
     pub fn from_source(source: &impl IndexSource) -> io::Result<Self> {
         let mut entries = Vec::new();
         let mut issues = Vec::new();
-        source.collect_initial(&mut entries, &mut issues)?;
+        let journal_checkpoints = source.collect_snapshot(&mut entries, &mut issues)?;
         let resolution_issues = resolve_entry_paths(&mut entries);
         entries.sort_by(compare_entries);
-        let journal_checkpoints = source.journal_checkpoints()?;
         Ok(Self {
             entries,
             issues,
@@ -205,14 +227,35 @@ impl SearchIndex {
             })
             .collect();
 
+        let mut paths: HashMap<String, usize> = slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| Some((slot.as_ref()?.path.clone(), index)))
+            .collect();
+
         for update in updates {
             match update {
-                IndexUpdate::Upsert(entry) => upsert_slot(&mut slots, &mut positions, entry),
+                IndexUpdate::Upsert(entry) => {
+                    upsert_slot(&mut slots, &mut positions, &mut paths, entry);
+                }
                 IndexUpdate::Remove {
                     volume_identity,
                     file_id,
                 } => {
                     if let Some(index) = positions.remove(&(Some(volume_identity), file_id)) {
+                        if let Some(Some(entry)) = slots.get(index) {
+                            paths.remove(&entry.path);
+                        }
+                        slots[index] = None;
+                    }
+                }
+                IndexUpdate::RemovePath(path) => {
+                    if let Some(index) = paths.remove(&path) {
+                        if let Some(Some(entry)) = slots.get(index)
+                            && let Some(file_id) = entry.metadata.file_id
+                        {
+                            positions.remove(&(entry.metadata.volume_identity.clone(), file_id));
+                        }
                         slots[index] = None;
                     }
                 }
@@ -232,8 +275,9 @@ impl SearchIndex {
                         }
                     }
                     positions.retain(|(identity, _), _| !on_volume(identity));
+                    paths.retain(|_, &mut index| slots[index].is_some());
                     for entry in entries {
-                        upsert_slot(&mut slots, &mut positions, entry);
+                        upsert_slot(&mut slots, &mut positions, &mut paths, entry);
                     }
                 }
             }
@@ -246,6 +290,10 @@ impl SearchIndex {
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     pub fn indexing_issue_count(&self) -> usize {
@@ -278,6 +326,7 @@ impl SearchIndex {
             .map(|entry| SearchResult {
                 display: entry.display.clone(),
                 path: entry.path.clone(),
+                path_resolved: entry.path_resolved,
                 attributes: entry.metadata.attributes,
             })
             .collect()
@@ -328,26 +377,43 @@ impl SearchIndex {
 pub struct SearchResult {
     pub display: String,
     pub path: String,
+    pub path_resolved: bool,
     pub attributes: u32,
 }
 
 fn upsert_slot(
     slots: &mut Vec<Option<SearchEntry>>,
     positions: &mut HashMap<(Option<String>, u128), usize>,
+    paths: &mut HashMap<String, usize>,
     entry: SearchEntry,
 ) {
-    let Some(file_id) = entry.metadata.file_id else {
-        slots.push(Some(entry));
-        return;
-    };
-    let key = (entry.metadata.volume_identity.clone(), file_id);
-    match positions.get(&key) {
-        Some(&index) => slots[index] = Some(entry),
-        None => {
-            positions.insert(key, slots.len());
-            slots.push(Some(entry));
+    let path = entry.path.clone();
+
+    // Check if an entry with this file_id already exists on this volume
+    if let Some(file_id) = entry.metadata.file_id {
+        let key = (entry.metadata.volume_identity.clone(), file_id);
+        if let Some(&index) = positions.get(&key) {
+            slots[index] = Some(entry);
+            paths.insert(path, index);
+            return;
         }
     }
+
+    // Check if an entry with the exact same path already exists in slots
+    if let Some(&index) = paths.get(&path) {
+        if let Some(file_id) = entry.metadata.file_id {
+            positions.insert((entry.metadata.volume_identity.clone(), file_id), index);
+        }
+        slots[index] = Some(entry);
+        return;
+    }
+
+    let index = slots.len();
+    if let Some(file_id) = entry.metadata.file_id {
+        positions.insert((entry.metadata.volume_identity.clone(), file_id), index);
+    }
+    paths.insert(path, index);
+    slots.push(Some(entry));
 }
 
 fn compare_entries(left: &SearchEntry, right: &SearchEntry) -> Ordering {
@@ -553,9 +619,10 @@ pub(crate) fn resolve_entry_paths(entries: &mut [SearchEntry]) -> Vec<IndexIssue
             }
         };
 
+        entries[index].path_resolved = base_path.is_some();
         if let Some(mut path) = base_path {
             for child_index in lineage.into_iter().rev() {
-                path.push(&entries[child_index].metadata.name);
+                path = join_child_path(&path, &entries[child_index].metadata.name);
             }
             entries[index].metadata.full_path = path;
             let display = entries[index].metadata.full_path.display().to_string();
@@ -567,6 +634,21 @@ pub(crate) fn resolve_entry_paths(entries: &mut [SearchEntry]) -> Vec<IndexIssue
     issues
 }
 
+fn join_child_path(parent: &Path, child: &str) -> PathBuf {
+    let parent_str = parent.to_string_lossy();
+    if parent_str.contains('\\') && !parent_str.contains('/') {
+        let mut s = parent_str.into_owned();
+        if !s.ends_with('\\') {
+            s.push('\\');
+        }
+        s.push_str(child);
+        PathBuf::from(s)
+    } else {
+        parent.join(child)
+    }
+}
+
+#[allow(dead_code)]
 fn collect_directories(
     root: &Path,
     out: &mut Vec<SearchEntry>,
@@ -633,17 +715,14 @@ fn record_issue(issues: &mut Vec<IndexIssue>, path: PathBuf, error: io::Error) {
 }
 
 fn should_skip_entry(entry: &fs::DirEntry) -> bool {
-    match entry.file_name().to_str() {
-        Some("target") | Some(".git") => true,
-        _ => false,
-    }
+    matches!(entry.file_name().to_str(), Some("target") | Some(".git"))
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
         fs, io,
-        path::PathBuf,
+        path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -780,6 +859,7 @@ mod tests {
         SearchEntry {
             display: name.to_owned(),
             path: full_path.to_owned(),
+            path_resolved: false,
             metadata: EntryMetadata {
                 file_id: Some(file_id),
                 parent_id,
@@ -830,10 +910,8 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "everything-lite-test-{}-{unique}",
-                std::process::id()
-            ));
+            let path =
+                std::env::temp_dir().join(format!("oxifind-test-{}-{unique}", std::process::id()));
             fs::create_dir(&path).unwrap();
             Self { path }
         }
@@ -863,11 +941,15 @@ mod tests {
         fs::write(root.join("target").join("skipped.txt"), "").unwrap();
         fs::write(root.join(".git").join("skipped.txt"), "").unwrap();
 
-        let index = SearchIndex::from_source(&WorkspaceSource::new(&root)).unwrap();
+        let index = SearchIndex::from_source(&WorkspaceSource::new(root)).unwrap();
 
+        let expected_nested = Path::new("nested")
+            .join("bravo.txt")
+            .display()
+            .to_string();
         assert_eq!(
             index.search("", 10),
-            vec!["alpha.txt", "nested", r"nested\bravo.txt"],
+            vec!["alpha.txt", "nested", &expected_nested],
         );
         assert_eq!(index.entries[2].metadata.name, "bravo.txt");
         assert_eq!(
@@ -1432,11 +1514,13 @@ mod tests {
                 SearchResult {
                     display: "nested".to_owned(),
                     path: r"C:\root\nested".to_owned(),
+                    path_resolved: true,
                     attributes: 0x0000_0010,
                 },
                 SearchResult {
                     display: r"nested\a.txt".to_owned(),
                     path: r"C:\root\nested\a.txt".to_owned(),
+                    path_resolved: true,
                     attributes: 0,
                 },
             ],
@@ -1477,5 +1561,25 @@ mod tests {
 
         assert_eq!(index.len(), 1);
         assert_eq!(index.indexing_issue_count(), 1);
+    }
+
+    #[test]
+    fn removes_entries_by_path_update() {
+        let mut index = index(vec![
+            entry("first.txt", "/home/user/first.txt"),
+            entry("second.txt", "/home/user/second.txt"),
+        ]);
+        assert_eq!(index.len(), 2);
+
+        let batch = UpdateBatch {
+            updates: vec![IndexUpdate::RemovePath("/home/user/first.txt".to_owned())],
+            issues: Vec::new(),
+            checkpoints: Vec::new(),
+        };
+        index.apply(batch);
+
+        assert_eq!(index.len(), 1);
+        assert_eq!(index.search("first", 10), Vec::<String>::new());
+        assert_eq!(index.search("second", 10), vec!["second.txt"]);
     }
 }

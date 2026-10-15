@@ -3,7 +3,7 @@ use std::{
     ffi::OsString,
     fmt, io,
     ops::ControlFlow,
-    path::{Component, Path, PathBuf, Prefix},
+    path::{Path, PathBuf},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -13,12 +13,14 @@ use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 
 use crate::{
-    elevation,
-    ntfs::{NtfsMftSource, NtfsMultiVolumeSource, local_fixed_volumes},
+    crawler::DirectorySource,
+    platform::{self, OpenAction, open_path},
     search::{
-        IndexSource, JournalCheckpoint, SearchIndex, SearchResult, UpdateBatch, WorkspaceSource,
+        IndexSource, JournalCheckpoint, SearchIndex, SearchResult, UpdateBatch,
     },
 };
+#[cfg(windows)]
+use crate::ntfs::{NtfsMftSource, NtfsMultiVolumeSource, local_fixed_volumes};
 
 const RESULT_LIMIT: usize = 200;
 const UPDATE_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -28,7 +30,7 @@ const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
 const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0000_0004;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 
-const APP_NAME: &str = "Everything Lite";
+const APP_NAME: &str = "OxiFind";
 const SEARCH_FIELD_ID: &str = "search_field";
 
 const SEARCH_SYNTAX: [(&str, &str); 7] = [
@@ -52,26 +54,30 @@ struct ResultRow {
     kind: String,
     is_folder: bool,
     path: String,
+    path_resolved: bool,
 }
 
 impl ResultRow {
     fn from_result(result: SearchResult) -> Self {
-        let path = Path::new(&result.path);
-        // Volume roots have no file name, so they show their whole path as the name.
-        let (name, folder) = match (path.file_name(), path.parent()) {
-            (Some(name), Some(parent)) => (
-                name.to_string_lossy().into_owned(),
-                parent.display().to_string(),
-            ),
-            _ => (result.path.clone(), String::new()),
-        };
+        let (name, folder) = split_result_path(&result.path);
         Self {
             name,
             folder,
             kind: describe_attributes(result.attributes),
             is_folder: result.attributes & FILE_ATTRIBUTE_DIRECTORY != 0,
             path: result.path,
+            path_resolved: result.path_resolved,
         }
+    }
+
+    fn action_path(&self) -> io::Result<PathBuf> {
+        if !self.path_resolved {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the indexed path could not be resolved",
+            ));
+        }
+        std::path::absolute(&self.path)
     }
 }
 
@@ -151,7 +157,7 @@ fn effective_query(query: &str, sort: ResultSort) -> String {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RowAction {
-    Explorer(OpenAction),
+    Open(OpenAction),
     CopyName,
     CopyPath,
 }
@@ -317,7 +323,7 @@ impl SearchApp {
             request_tx,
             response_rx,
             is_indexing: true,
-            is_elevated: elevation::is_elevated(),
+            is_elevated: platform::is_elevated(),
             worker_stopped: false,
             ..Self::default()
         }
@@ -445,8 +451,11 @@ impl SearchApp {
             return;
         };
         match action {
-            RowAction::Explorer(open) => {
-                if let Err(error) = open_in_explorer(Path::new(&row.path), open) {
+            RowAction::Open(open) => {
+                if let Err(error) = row
+                    .action_path()
+                    .and_then(|path| open_path(&path, open))
+                {
                     self.notice = Some(format!("Could not open {}: {error}", row.path));
                 }
             }
@@ -463,7 +472,7 @@ impl SearchApp {
 
     fn restart_as_administrator(&mut self, ctx: &egui::Context) {
         let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
-        match elevation::restart_elevated(&arguments) {
+        match platform::restart_elevated(&arguments) {
             Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Err(error) => {
                 self.notice = Some(format!("Could not restart as administrator: {error}"));
@@ -579,7 +588,7 @@ impl SearchApp {
                 )
                 .clicked()
             {
-                self.run_selected_action(ui.ctx(), RowAction::Explorer(OpenAction::Open));
+                self.run_selected_action(ui.ctx(), RowAction::Open(OpenAction::Open));
             }
             if ui
                 .add_enabled(
@@ -588,7 +597,7 @@ impl SearchApp {
                 )
                 .clicked()
             {
-                self.run_selected_action(ui.ctx(), RowAction::Explorer(OpenAction::Reveal));
+                self.run_selected_action(ui.ctx(), RowAction::Open(OpenAction::Reveal));
             }
         });
 
@@ -626,7 +635,7 @@ impl SearchApp {
                 OpenAction::Open
             };
             let index = self.selected_row().unwrap_or(0);
-            self.run_row_action(ui.ctx(), index, RowAction::Explorer(open));
+            self.run_row_action(ui.ctx(), index, RowAction::Open(open));
             self.focus_search = true;
         }
         ui.add_space(4.0);
@@ -685,12 +694,12 @@ impl SearchApp {
                         selected = Some(index);
                     }
                     if response.double_clicked() {
-                        action = Some((index, RowAction::Explorer(OpenAction::Open)));
+                        action = Some((index, RowAction::Open(OpenAction::Open)));
                     }
                     response.context_menu(|ui| {
                         let items = [
-                            ("Open", RowAction::Explorer(OpenAction::Open)),
-                            ("Show in folder", RowAction::Explorer(OpenAction::Reveal)),
+                            ("Open", RowAction::Open(OpenAction::Open)),
+                            ("Show in folder", RowAction::Open(OpenAction::Reveal)),
                             ("Copy name", RowAction::CopyName),
                             ("Copy full path", RowAction::CopyPath),
                         ];
@@ -799,13 +808,21 @@ fn spawn_search_worker(
     response_tx: ResponseSender,
 ) {
     thread::spawn(move || match scope {
+        #[cfg(windows)]
         IndexScope::LocalDrives => run_search_worker(
             NtfsMultiVolumeSource::new(local_fixed_volumes()),
             command_tx,
             command_rx,
             response_tx,
         ),
-        // Drive roots require MFT access; a failure is reported instead of falling back to walking.
+        #[cfg(not(windows))]
+        IndexScope::LocalDrives => run_search_worker(
+            DirectorySource::local_drives(),
+            command_tx,
+            command_rx,
+            response_tx,
+        ),
+        #[cfg(windows)]
         IndexScope::Root(root) if is_volume_root(&root) => run_search_worker(
             NtfsMftSource::new(root),
             command_tx,
@@ -813,7 +830,7 @@ fn spawn_search_worker(
             response_tx,
         ),
         IndexScope::Root(root) => run_search_worker(
-            WorkspaceSource::new(root),
+            DirectorySource::new(root),
             command_tx,
             command_rx,
             response_tx,
@@ -932,15 +949,57 @@ fn poll_updates(
     }
 }
 
-/// Returns whether `path` names exactly the root directory of a local drive, such as `C:\`.
+fn split_result_path(path_str: &str) -> (String, String) {
+    let trimmed = path_str.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return (path_str.to_owned(), String::new());
+    }
+    if let Some(pos) = trimmed.rfind(['/', '\\']) {
+        let name = trimmed[pos + 1..].to_owned();
+        let mut folder = trimmed[..pos].to_owned();
+        if folder.ends_with(':') {
+            folder.push(path_str.chars().nth(pos).unwrap_or('\\'));
+        } else if folder.is_empty() && (path_str.starts_with('/') || path_str.starts_with('\\')) {
+            folder.push(path_str.chars().next().unwrap_or('/'));
+        }
+        (name, folder)
+    } else {
+        (path_str.to_owned(), String::new())
+    }
+}
+
+/// Returns whether `path` names exactly the root directory of a local drive or volume, such as `C:\` or `/`.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn is_volume_root(path: &Path) -> bool {
-    let mut components = path.components();
-    let is_drive = matches!(
-        components.next(),
-        Some(Component::Prefix(prefix))
-            if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
-    );
-    is_drive && matches!(components.next(), Some(Component::RootDir)) && components.next().is_none()
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+
+        let mut components = path.components();
+        let is_drive = matches!(
+            components.next(),
+            Some(Component::Prefix(prefix))
+                if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+        );
+        is_drive && matches!(components.next(), Some(Component::RootDir)) && components.next().is_none()
+    }
+    #[cfg(not(windows))]
+    {
+        if path == Path::new("/") {
+            return true;
+        }
+        let lossy = path.to_string_lossy();
+        let stripped = lossy.strip_prefix(r"\\?\").unwrap_or(&lossy);
+        let bytes = stripped.as_bytes();
+        if bytes.len() == 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/')
+        {
+            return true;
+        }
+        false
+    }
 }
 
 fn describe_attributes(attributes: u32) -> String {
@@ -959,46 +1018,6 @@ fn describe_attributes(attributes: u32) -> String {
     .fold(kind.to_owned(), |description, (_, label)| {
         format!("{description}, {label}")
     })
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OpenAction {
-    Open,
-    Reveal,
-}
-
-/// Builds the raw Explorer argument; Windows paths cannot contain quotes, so quoting is safe.
-fn explorer_argument(path: &Path, action: OpenAction) -> String {
-    match action {
-        OpenAction::Open => format!("\"{}\"", path.display()),
-        OpenAction::Reveal => format!("/select,\"{}\"", path.display()),
-    }
-}
-
-#[cfg(windows)]
-fn open_in_explorer(path: &Path, action: OpenAction) -> io::Result<()> {
-    use std::os::windows::process::CommandExt;
-
-    let path = std::path::absolute(path)?;
-    if path.as_os_str().to_string_lossy().contains('"') {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "paths containing quotes cannot be passed to Explorer",
-        ));
-    }
-    // Explorer reports a failure exit code even after opening successfully, so only spawning is checked.
-    std::process::Command::new("explorer.exe")
-        .raw_arg(explorer_argument(&path, action))
-        .spawn()
-        .map(drop)
-}
-
-#[cfg(not(windows))]
-fn open_in_explorer(path: &Path, _action: OpenAction) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        format!("opening {} requires Windows Explorer", path.display()),
-    ))
 }
 
 fn format_indexing_status(scope: impl fmt::Display) -> String {
@@ -1046,11 +1065,13 @@ mod tests {
         SearchIndex, SearchResult, UpdateBatch, WorkspaceSource,
     };
 
+    use crate::platform::{OpenAction, explorer_argument};
+
     use super::{
-        IndexScope, OpenAction, ResultRow, ResultSort, SearchApp, SearchRequest, SearchResponse,
+        IndexScope, ResultRow, ResultSort, RowAction, SearchApp, SearchRequest, SearchResponse,
         SortColumn, WorkerCommand, WorkerResponse, describe_attributes, effective_query,
-        explorer_argument, format_index_status, format_indexing_status, format_update_status,
-        handle_command, is_volume_root, poll_updates,
+        format_index_status, format_indexing_status, format_update_status, handle_command,
+        is_volume_root, poll_updates,
     };
 
     fn displays(results: &[SearchResult]) -> Vec<&str> {
@@ -1075,6 +1096,7 @@ mod tests {
         let row = ResultRow::from_result(SearchResult {
             display: r"nested\a.txt".to_owned(),
             path: r"C:\root\nested\a.txt".to_owned(),
+            path_resolved: true,
             attributes: 0x0000_0001,
         });
 
@@ -1086,6 +1108,7 @@ mod tests {
                 kind: "File, read-only".to_owned(),
                 is_folder: false,
                 path: r"C:\root\nested\a.txt".to_owned(),
+                path_resolved: true,
             }
         );
     }
@@ -1095,6 +1118,7 @@ mod tests {
         let row = ResultRow::from_result(SearchResult {
             display: r"C:\".to_owned(),
             path: r"C:\".to_owned(),
+            path_resolved: true,
             attributes: 0x0000_0010,
         });
 
@@ -1148,6 +1172,7 @@ mod tests {
         SearchResult {
             display: path.to_owned(),
             path: path.to_owned(),
+            path_resolved: true,
             attributes: 0,
         }
     }
@@ -1262,6 +1287,7 @@ mod tests {
         SearchEntry {
             display: name.to_owned(),
             path: name.to_owned(),
+            path_resolved: false,
             metadata: EntryMetadata {
                 file_id: Some(file_id),
                 parent_id,
@@ -1271,6 +1297,93 @@ mod tests {
                 attributes: 0,
             },
         }
+    }
+
+    #[test]
+    fn rejects_unresolved_index_entries_when_preparing_opening_paths() {
+        for (parent_id, path) in [
+            (99, "orphan.txt"),
+            (3, "orphan.txt"),
+            (99, r"C:\orphan.txt"),
+        ] {
+            let mut orphan = entry(3, Some(parent_id), "orphan.txt");
+            orphan.path = path.to_owned();
+            orphan.metadata.full_path = path.into();
+            let source = ChangingSource {
+                updates: vec![IndexUpdate::Upsert(orphan)],
+                ..ChangingSource::default()
+            };
+            let mut index = SearchIndex::from_source(&source).unwrap();
+            index.refresh(&source).unwrap();
+            let result = index.search_results("=orphan.txt", 1).pop().unwrap();
+            let row = ResultRow::from_result(result);
+
+            assert_eq!(row.path, path);
+            assert_eq!(row.name, "orphan.txt");
+            assert_eq!(
+                row.action_path().unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+
+            let context = eframe::egui::Context::default();
+            let mut app = SearchApp {
+                rows: vec![row],
+                ..SearchApp::default()
+            };
+            for action in [OpenAction::Open, OpenAction::Reveal] {
+                app.run_row_action(&context, 0, RowAction::Open(action));
+                assert!(app.notice.as_deref().is_some_and(|notice| {
+                    notice.contains("the indexed path could not be resolved")
+                }));
+                app.notice = None;
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_previously_resolved_entries_when_preparing_opening_paths_after_parent_removal() {
+        let source = ChangingSource {
+            updates: vec![IndexUpdate::Remove {
+                volume_identity: r"C:\".to_owned(),
+                file_id: 1,
+            }],
+            ..ChangingSource::default()
+        };
+        let mut index = SearchIndex::from_source(&source).unwrap();
+        assert!(index.search_results("=alpha.txt", 1)[0].path_resolved);
+        index.refresh(&source).unwrap();
+        let result = index.search_results("=alpha.txt", 1).pop().unwrap();
+        let row = ResultRow::from_result(result);
+
+        assert_eq!(row.path, r"C:\alpha.txt");
+        assert_eq!(
+            row.action_path().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn preserves_relative_workspace_entries_when_preparing_opening_paths() {
+        let path = Path::new("nested/workspace-relative.txt");
+        let source = ChangingSource {
+            updates: vec![IndexUpdate::Upsert(SearchEntry::from_path(
+                "workspace-relative.txt".to_owned(),
+                path.to_path_buf(),
+            ))],
+            ..ChangingSource::default()
+        };
+        let mut index = SearchIndex::from_source(&source).unwrap();
+        index.refresh(&source).unwrap();
+        let result = index
+            .search_results("=workspace-relative.txt", 1)
+            .pop()
+            .unwrap();
+        let row = ResultRow::from_result(result);
+
+        assert_eq!(
+            row.action_path().unwrap(),
+            std::path::absolute(path).unwrap()
+        );
     }
 
     #[test]

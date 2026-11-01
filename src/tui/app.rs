@@ -9,8 +9,8 @@ use ratatui::widgets::TableState;
 
 use crate::{
     engine::{
-        IndexScope, ResultSort, SearchRequest, SearchResponse, SortColumn,
-        WorkerCommand, WorkerResponse, effective_query, spawn_search_worker,
+        IndexScope, ResultSort, SearchRequest, SearchResponse, SortColumn, WorkerCommand,
+        WorkerResponse, effective_query, spawn_search_worker,
     },
     platform::{OpenAction, open_path},
     search::SearchResult,
@@ -89,12 +89,7 @@ impl TuiApp {
         let (command_tx, command_rx) = mpsc::channel::<WorkerCommand>();
         let (response_tx, response_rx) = mpsc::channel::<WorkerResponse>();
 
-        spawn_search_worker(
-            scope.clone(),
-            command_tx.clone(),
-            command_rx,
-            response_tx,
-        );
+        spawn_search_worker(scope.clone(), command_tx.clone(), command_rx, response_tx);
 
         Self::with_channels(scope, command_tx, response_rx)
     }
@@ -317,7 +312,10 @@ impl TuiApp {
         if let Some(modal) = &mut self.active_modal {
             match modal {
                 TuiModal::Help => {
-                    if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') || key.code == KeyCode::F(1) {
+                    if key.code == KeyCode::Esc
+                        || key.code == KeyCode::Char('q')
+                        || key.code == KeyCode::F(1)
+                    {
                         self.active_modal = None;
                     }
                 }
@@ -423,7 +421,9 @@ impl TuiApp {
             // When ResultTable is focused, allow vim keys j/k
             KeyCode::Char('j') if self.focused == FocusedWidget::ResultTable => self.select_next(),
             KeyCode::Char('k') if self.focused == FocusedWidget::ResultTable => self.select_prev(),
-            KeyCode::Char('q') if self.focused == FocusedWidget::ResultTable => self.should_quit = true,
+            KeyCode::Char('q') if self.focused == FocusedWidget::ResultTable => {
+                self.should_quit = true
+            }
             KeyCode::Char('?') if self.focused == FocusedWidget::ResultTable => {
                 self.active_modal = Some(TuiModal::Help);
             }
@@ -515,7 +515,10 @@ impl TuiApp {
         self.trigger_search();
     }
 
-    pub fn run(&mut self, terminal: &mut TerminalGuard) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub fn run(
+        &mut self,
+        terminal: &mut TerminalGuard,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let tick_rate = Duration::from_millis(50);
         let mut last_tick = Instant::now();
 
@@ -530,7 +533,9 @@ impl TuiApp {
                 .checked_sub(last_tick.elapsed())
                 .unwrap_or_else(|| Duration::from_millis(0));
 
-            if event::poll(timeout)? && let Event::Key(key) = event::read()? {
+            if event::poll(timeout)?
+                && let Event::Key(key) = event::read()?
+            {
                 self.handle_key_event(key);
             }
 

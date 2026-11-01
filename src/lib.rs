@@ -6,6 +6,7 @@ pub mod backend;
 pub mod crawler;
 pub mod engine;
 pub mod ntfs;
+pub mod persistence;
 pub mod platform;
 pub mod search;
 #[cfg(feature = "tui")]

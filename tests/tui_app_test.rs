@@ -4,9 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
 use std::sync::mpsc;
 
-use oxifind::engine::{
-    IndexScope, SearchResponse, WorkerCommand, WorkerResponse,
-};
+use oxifind::engine::{IndexScope, SearchResponse, WorkerCommand, WorkerResponse};
 use oxifind::search::SearchResult;
 use oxifind::tui::app::{FocusedWidget, SearchOptions, TuiApp, TuiModal};
 use oxifind::tui::ui;
@@ -222,7 +220,10 @@ fn modal_dialog_open_and_close() {
 
     // Open ScopePicker with F2
     app.handle_key_event(press_key(KeyCode::F(2)));
-    assert!(matches!(app.active_modal, Some(TuiModal::ScopePicker { .. })));
+    assert!(matches!(
+        app.active_modal,
+        Some(TuiModal::ScopePicker { .. })
+    ));
 
     // Esc closes ScopePicker
     app.handle_key_event(press_key(KeyCode::Esc));

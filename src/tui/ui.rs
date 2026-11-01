@@ -3,13 +3,11 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Borders, Cell, Clear, HighlightSpacing, Paragraph, Row, Table,
-    },
+    widgets::{Block, BorderType, Borders, Cell, Clear, HighlightSpacing, Paragraph, Row, Table},
 };
 
-use crate::engine::{describe_attributes, split_result_path, SortColumn};
 use super::app::{FocusedWidget, TuiApp, TuiModal};
+use crate::engine::{SortColumn, describe_attributes, split_result_path};
 
 // UI Palette matching OxiDisc modern dark theme
 pub const COLOR_BG: Color = Color::Rgb(22, 29, 41);
@@ -53,12 +51,16 @@ fn render_header(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let index_status_span = if app.is_indexing {
         Span::styled(
             " [INDEXING...] ",
-            Style::default().fg(COLOR_HIGHLIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_HIGHLIGHT)
+                .add_modifier(Modifier::BOLD),
         )
     } else {
         Span::styled(
             format!(" [INDEXED: {} items] ", app.indexed_items),
-            Style::default().fg(COLOR_SUCCESS).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_SUCCESS)
+                .add_modifier(Modifier::BOLD),
         )
     };
 
@@ -82,10 +84,7 @@ fn render_header(frame: &mut Frame, app: &TuiApp, area: Rect) {
     ]);
 
     let sort_label = app.sort.label();
-    let sort_span = Span::styled(
-        format!(" {sort_label} "),
-        Style::default().fg(COLOR_MUTED),
-    );
+    let sort_span = Span::styled(format!(" {sort_label} "), Style::default().fg(COLOR_MUTED));
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -100,7 +99,9 @@ fn render_header(frame: &mut Frame, app: &TuiApp, area: Rect) {
     if let Some((msg, _)) = &app.status_message {
         status_spans.push(Span::styled(
             format!("Notice: {msg}"),
-            Style::default().fg(COLOR_HIGHLIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_HIGHLIGHT)
+                .add_modifier(Modifier::BOLD),
         ));
     } else if app.indexing_issues > 0 {
         status_spans.push(Span::styled(
@@ -135,7 +136,9 @@ fn render_search_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let search_title = if is_focused {
         Line::from(vec![Span::styled(
             " Search (Focused) ",
-            Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_ACCENT)
+                .add_modifier(Modifier::BOLD),
         )])
     } else {
         Line::from(vec![Span::styled(
@@ -171,13 +174,12 @@ fn render_search_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
         if active {
             Span::styled(
                 format!(" [{key}:{label}] "),
-                Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_ACCENT)
+                    .add_modifier(Modifier::BOLD),
             )
         } else {
-            Span::styled(
-                format!(" [{key}:{label}] "),
-                Style::default().fg(COLOR_DIM),
-            )
+            Span::styled(format!(" [{key}:{label}] "), Style::default().fg(COLOR_DIM))
         }
     };
 
@@ -206,12 +208,10 @@ fn render_table(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
         COLOR_BORDER
     };
 
-    let title_line = Line::from(vec![
-        Span::styled(
-            format!(" Results ({} matches) ", app.results.len()),
-            Style::default().fg(if is_focused { COLOR_ACCENT } else { COLOR_TEXT }),
-        ),
-    ]);
+    let title_line = Line::from(vec![Span::styled(
+        format!(" Results ({} matches) ", app.results.len()),
+        Style::default().fg(if is_focused { COLOR_ACCENT } else { COLOR_TEXT }),
+    )]);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -219,20 +219,20 @@ fn render_table(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
         .border_type(BorderType::Rounded)
         .title(title_line);
 
-    let header_cells = [
-        SortColumn::Name,
-        SortColumn::Path,
-        SortColumn::Type,
-    ]
-    .iter()
-    .map(|col| {
-        let label = app.sort.header_label(*col);
-        Cell::from(label).style(
-            Style::default()
-                .fg(if app.sort.column == *col { COLOR_ACCENT } else { COLOR_TEXT })
-                .add_modifier(Modifier::BOLD),
-        )
-    });
+    let header_cells = [SortColumn::Name, SortColumn::Path, SortColumn::Type]
+        .iter()
+        .map(|col| {
+            let label = app.sort.header_label(*col);
+            Cell::from(label).style(
+                Style::default()
+                    .fg(if app.sort.column == *col {
+                        COLOR_ACCENT
+                    } else {
+                        COLOR_TEXT
+                    })
+                    .add_modifier(Modifier::BOLD),
+            )
+        });
 
     let header_row = Row::new(header_cells)
         .style(Style::default().bg(COLOR_CARD))
@@ -249,7 +249,8 @@ fn render_table(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
             let kind = describe_attributes(res.attributes);
 
             // Highlight matches in filename
-            let name_span = if !query_lower.is_empty() && name.to_lowercase().contains(&query_lower) {
+            let name_span = if !query_lower.is_empty() && name.to_lowercase().contains(&query_lower)
+            {
                 let name_lower = name.to_lowercase();
                 if let Some(pos) = name_lower.find(&query_lower) {
                     let end = pos + query_lower.len();
@@ -310,7 +311,10 @@ fn render_details(frame: &mut Frame, app: &TuiApp, area: Rect) {
         let kind = describe_attributes(res.attributes);
         Line::from(vec![
             Span::styled("Path: ", Style::default().fg(COLOR_MUTED)),
-            Span::styled(&res.path, Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                &res.path,
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  |  "),
             Span::styled(format!("Type: {kind}"), Style::default().fg(COLOR_DIM)),
         ])
@@ -361,20 +365,37 @@ fn render_modal(frame: &mut Frame, modal: &TuiModal, area: Rect) {
                 .title_alignment(Alignment::Center);
 
             let help_text = vec![
-                Line::from(Span::styled("Navigation & Selection", Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(
+                    "Navigation & Selection",
+                    Style::default()
+                        .fg(COLOR_ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )),
                 Line::from("  ↓ / j, ↑ / k       Navigate through results list"),
                 Line::from("  PageDown / PageUp  Fast page navigation"),
                 Line::from("  Home / End         Jump to first or last result"),
-                Line::from("  Tab                Toggle focus between Search Input and Results Table"),
+                Line::from(
+                    "  Tab                Toggle focus between Search Input and Results Table",
+                ),
                 Line::from(""),
-                Line::from(Span::styled("Actions", Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(
+                    "Actions",
+                    Style::default()
+                        .fg(COLOR_ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )),
                 Line::from("  Enter              Open file with system default handler"),
                 Line::from("  Ctrl+O / Alt+O     Reveal item in native file manager"),
                 Line::from("  Ctrl+R / F5        Force re-index / refresh"),
                 Line::from("  Esc                Clear search query / Close active dialog"),
                 Line::from("  Ctrl+Q / Ctrl+C    Exit OxiFind"),
                 Line::from(""),
-                Line::from(Span::styled("Search & Filters", Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(
+                    "Search & Filters",
+                    Style::default()
+                        .fg(COLOR_ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )),
                 Line::from("  Alt+c              Toggle Match Case"),
                 Line::from("  Alt+w              Toggle Whole Word"),
                 Line::from("  Alt+p              Toggle Match Path"),
@@ -404,7 +425,10 @@ fn render_modal(frame: &mut Frame, modal: &TuiModal, area: Rect) {
                 let is_selected = i == *selected;
                 let symbol = if is_selected { "> " } else { "  " };
                 let style = if is_selected {
-                    Style::default().fg(COLOR_ACCENT).bg(COLOR_CARD).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(COLOR_ACCENT)
+                        .bg(COLOR_CARD)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(COLOR_TEXT)
                 };

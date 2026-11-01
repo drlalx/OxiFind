@@ -186,8 +186,8 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn quotes_arguments_for_windows_command_line() {
-        use std::ffi::OsString;
         use super::windows::{command_line, quote_argument};
+        use std::ffi::OsString;
 
         assert_eq!(quote_argument(r"C:\"), r"C:\");
         assert_eq!(

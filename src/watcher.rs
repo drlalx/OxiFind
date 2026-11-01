@@ -209,7 +209,10 @@ mod tests {
             IndexUpdate::Upsert(entry) => entry.metadata.name == "watched_doc.txt",
             _ => false,
         });
-        assert!(created, "Did not receive Upsert for created file in {updates:?}");
+        assert!(
+            created,
+            "Did not receive Upsert for created file in {updates:?}"
+        );
 
         // Now delete the file
         fs::remove_file(&file_path).unwrap();
@@ -222,6 +225,9 @@ mod tests {
             IndexUpdate::RemovePath(p) => p.contains("watched_doc.txt"),
             _ => false,
         });
-        assert!(deleted, "Did not receive RemovePath for deleted file in {delete_updates:?}");
+        assert!(
+            deleted,
+            "Did not receive RemovePath for deleted file in {delete_updates:?}"
+        );
     }
 }

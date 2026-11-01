@@ -1,6 +1,6 @@
 # Development Burndown
 
-Updated: 2026-10-17
+Updated: 2026-11-01
 
 | Milestone | Planned items | Complete | Remaining |
 | --- | ---: | ---: | ---: |
@@ -9,12 +9,12 @@ Updated: 2026-10-17
 | 3. Implement NTFS Initial Indexing | 4 | 4 | 0 |
 | 4. Maintain the Index | 4 | 4 | 0 |
 | 5. Improve Search and User Experience | 6 | 6 | 0 |
-| 6. Persistence, Packaging, and Operations | 5 | 0 | 5 |
-| **Total** | **27** | **22** | **5** |
+| 6. Persistence, Packaging, and Operations | 5 | 3 | 2 |
+| **Total** | **27** | **25** | **2** |
 
 ```text
-Completed [######################.....] 22/27
-Remaining [#####......................] 5/27
+Completed [#########################...] 25/27
+Remaining [##..........................] 2/27
 ```
 
 Milestone 1 is complete. Workspace traversal, relative paths, `target`/`.git`

@@ -1943,16 +1943,14 @@ mod tests {
 
         let results = index.search_results("=renamed.txt", 10);
         assert_eq!(results.len(), volume_count);
-        assert!(
-            results
-                .iter()
-                .all(|result| is_path_absolute(&result.path))
-        );
+        assert!(results.iter().all(|result| is_path_absolute(&result.path)));
     }
 
     fn is_path_absolute(path: &str) -> bool {
         Path::new(path).is_absolute()
-            || (path.len() >= 3 && path.as_bytes()[1] == b':' && (path.as_bytes()[2] == b'\\' || path.as_bytes()[2] == b'/'))
+            || (path.len() >= 3
+                && path.as_bytes()[1] == b':'
+                && (path.as_bytes()[2] == b'\\' || path.as_bytes()[2] == b'/'))
     }
 
     #[test]

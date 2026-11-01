@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
@@ -7,7 +8,7 @@ use std::{
 
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SearchEntry {
     pub display: String,
     pub path: String,
@@ -42,7 +43,7 @@ fn path_file_name(path: &Path) -> String {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EntryMetadata {
     pub file_id: Option<u128>,
     pub parent_id: Option<u128>,
@@ -58,7 +59,7 @@ pub struct IndexIssue {
     pub message: String,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct JournalCheckpoint {
     pub volume_identity: String,
     pub journal_id: u64,
@@ -324,6 +325,25 @@ impl SearchIndex {
 
     pub fn journal_checkpoints(&self) -> &[JournalCheckpoint] {
         &self.journal_checkpoints
+    }
+
+    pub fn entries(&self) -> &[SearchEntry] {
+        &self.entries
+    }
+
+    pub fn from_persisted(
+        mut entries: Vec<SearchEntry>,
+        journal_checkpoints: Vec<JournalCheckpoint>,
+    ) -> Self {
+        entries.sort_by(compare_entries);
+        let search_data = build_search_data(&entries);
+        Self {
+            entries,
+            search_data,
+            issues: Vec::new(),
+            resolution_issues: Vec::new(),
+            journal_checkpoints,
+        }
     }
 
     /// Returns the displays of [`search_results`](Self::search_results).

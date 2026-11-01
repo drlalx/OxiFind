@@ -179,15 +179,25 @@ entries was benchmarked and reduced by 16x from ~350 ms down to ~21 ms.
 
 **Objective:** Make the application practical outside development.
 
-1. Persist index snapshots and journal checkpoints atomically per volume.
-2. Validate persisted data and rebuild safely after corruption or version
+1. [x] Persist index snapshots and journal checkpoints atomically per volume.
+2. [x] Validate persisted data and rebuild safely after corruption or version
    changes.
-3. Add application settings for indexed volumes, excluded paths, and result
+3. [x] Add application settings for indexed volumes, excluded paths, and result
    limits.
-4. Package a signed Windows executable and document installation, permissions,
+4. [ ] Package a signed Windows executable and document installation, permissions,
    diagnostics, and uninstallation.
-5. Add integration tests for first-run indexing, restart, journal recovery,
+5. [ ] Add integration tests for first-run indexing, restart, journal recovery,
    and unsupported volumes.
+
+**Progress:** Items 1, 2, and 3 are complete. An atomic persistence module
+(`src/persistence.rs`) serializes index snapshots and journal checkpoints with
+a binary header (`OXIFIND1`), version tracking, payload length, and CRC32
+integrity checksums. Snapshots are written via atomic temporary files and renames
+to eliminate partial or broken writes. Corruption or version mismatches are safely
+caught and handled without panicking. Platform-specific application data directories
+and JSON application settings (`AppSettings`) support configurable indexed volumes,
+pattern exclusions, and result limits. Dedicated integration tests verify roundtrips,
+tamper detection, and index recreation.
 
 **Exit criteria:** The application can be installed, restarted, and recovered
 without requiring manual index management.

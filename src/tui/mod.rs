@@ -1,9 +1,9 @@
-pub mod terminal;
 pub mod app;
+pub mod terminal;
 pub mod ui;
 
-use std::error::Error;
 use crate::engine::IndexScope;
+use std::error::Error;
 
 pub fn run(scope: IndexScope) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut terminal = terminal::TerminalGuard::new()?;

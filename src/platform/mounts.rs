@@ -99,7 +99,9 @@ pub fn is_local_filesystem(spec: &str, fs_type: &str) -> bool {
     }
 
     // Network and virtual FUSE file systems
-    if fs_type.starts_with("fuse.") || matches!(fs_type, "nfs" | "nfs4" | "cifs" | "smbfs" | "davfs") {
+    if fs_type.starts_with("fuse.")
+        || matches!(fs_type, "nfs" | "nfs4" | "cifs" | "smbfs" | "davfs")
+    {
         return false;
     }
 
@@ -190,7 +192,9 @@ pub fn default_local_roots() -> Vec<PathBuf> {
 
 /// Checks whether a given path starts with any of the excluded path prefixes.
 pub fn is_path_excluded(path: &Path, exclusions: &[PathBuf]) -> bool {
-    exclusions.iter().any(|exclusion| path.starts_with(exclusion))
+    exclusions
+        .iter()
+        .any(|exclusion| path.starts_with(exclusion))
 }
 
 #[cfg(test)]
@@ -254,7 +258,10 @@ fusectl /sys/fs/fuse/connections fusectl rw 0 0
 
         assert!(is_path_excluded(Path::new("/proc/cpuinfo"), &exclusions));
         assert!(is_path_excluded(Path::new("/sys/devices"), &exclusions));
-        assert!(!is_path_excluded(Path::new("/home/user/document"), &exclusions));
+        assert!(!is_path_excluded(
+            Path::new("/home/user/document"),
+            &exclusions
+        ));
         assert!(!is_path_excluded(Path::new("/usr/bin/ls"), &exclusions));
     }
 

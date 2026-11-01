@@ -13,9 +13,7 @@ use std::{
 
 use crate::{
     platform::mounts::{default_local_roots, default_system_exclusions, is_path_excluded},
-    search::{
-        EntryMetadata, IndexIssue, IndexSource, IndexUpdate, JournalCheckpoint, SearchEntry,
-    },
+    search::{EntryMetadata, IndexIssue, IndexSource, IndexUpdate, JournalCheckpoint, SearchEntry},
     watcher::DirectoryWatcher,
 };
 
@@ -386,7 +384,11 @@ pub(crate) fn should_skip_path(path: &Path, exclusions: &[PathBuf]) -> bool {
 }
 
 #[cfg(windows)]
-pub(crate) fn compute_attributes(_path: &Path, _file_type: &fs::FileType, metadata: Option<&fs::Metadata>) -> u32 {
+pub(crate) fn compute_attributes(
+    _path: &Path,
+    _file_type: &fs::FileType,
+    metadata: Option<&fs::Metadata>,
+) -> u32 {
     use std::os::windows::fs::MetadataExt;
     if let Some(meta) = metadata {
         meta.file_attributes()
@@ -396,7 +398,11 @@ pub(crate) fn compute_attributes(_path: &Path, _file_type: &fs::FileType, metada
 }
 
 #[cfg(not(windows))]
-pub(crate) fn compute_attributes(path: &Path, file_type: &fs::FileType, metadata: Option<&fs::Metadata>) -> u32 {
+pub(crate) fn compute_attributes(
+    path: &Path,
+    file_type: &fs::FileType,
+    metadata: Option<&fs::Metadata>,
+) -> u32 {
     let mut attributes = 0u32;
     if file_type.is_dir() {
         attributes |= FILE_ATTRIBUTE_DIRECTORY;
@@ -439,9 +445,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{
-        DirectorySource, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
-    };
+    use super::{DirectorySource, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN};
     use crate::search::IndexSource;
 
     struct TemporaryDirectory {
@@ -454,8 +458,10 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path = std::env::temp_dir()
-                .join(format!("oxifind-crawler-test-{}-{unique}", std::process::id()));
+            let path = std::env::temp_dir().join(format!(
+                "oxifind-crawler-test-{}-{unique}",
+                std::process::id()
+            ));
             fs::create_dir_all(&path).unwrap();
             Self { path }
         }

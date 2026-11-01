@@ -127,7 +127,8 @@ fn collects_and_applies_live_file_events_to_search_index() {
 
     std::thread::sleep(std::time::Duration::from_millis(150));
 
-    let batch = oxifind::search::UpdateBatch::collect(&source, index.journal_checkpoints()).unwrap();
+    let batch =
+        oxifind::search::UpdateBatch::collect(&source, index.journal_checkpoints()).unwrap();
     index.apply(batch);
 
     let results = index.search_results("dynamic", 10);
@@ -138,9 +139,13 @@ fn collects_and_applies_live_file_events_to_search_index() {
     fs::remove_file(&initial_file).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(150));
 
-    let delete_batch = oxifind::search::UpdateBatch::collect(&source, index.journal_checkpoints()).unwrap();
+    let delete_batch =
+        oxifind::search::UpdateBatch::collect(&source, index.journal_checkpoints()).unwrap();
     index.apply(delete_batch);
 
     let remaining = index.search_results("initial", 10);
-    assert!(remaining.is_empty(), "Deleted file still returned in search: {remaining:?}");
+    assert!(
+        remaining.is_empty(),
+        "Deleted file still returned in search: {remaining:?}"
+    );
 }

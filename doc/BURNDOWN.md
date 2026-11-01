@@ -9,12 +9,12 @@ Updated: 2026-11-01
 | 3. Implement NTFS Initial Indexing | 4 | 4 | 0 |
 | 4. Maintain the Index | 4 | 4 | 0 |
 | 5. Improve Search and User Experience | 6 | 6 | 0 |
-| 6. Persistence, Packaging, and Operations | 5 | 3 | 2 |
-| **Total** | **27** | **25** | **2** |
+| 6. Persistence, Packaging, and Operations | 5 | 4 | 1 |
+| **Total** | **27** | **26** | **1** |
 
 ```text
-Completed [#########################...] 25/27
-Remaining [##..........................] 2/27
+Completed [##########################.] 26/27
+Remaining [#...........................] 1/27
 ```
 
 Milestone 1 is complete. Workspace traversal, relative paths, `target`/`.git`
@@ -142,5 +142,16 @@ chunk filtering with scoped threads. Query latency on 500,000 files dropped from
   - Search worker command draining in `app.rs` and `engine.rs` to prevent UI lag on rapid typing.
   - Winit mixed-DPI dragging patch configured in `[patch.crates-io]`.
   - Test suite expanded to 155 passed tests across 7 test suites, with 0 Clippy issues under strict no-panic policy.
+- [x] USN Change Journal wrap recovery, restart verification, and volume resilience:
+  - First-run snapshot creation, CRC32 persistence verification, and cold-start index restoration without re-scanning.
+  - Continuous incremental updates and checkpoint advancement.
+  - USN Journal wrap and purge gap detection (`checkpoint.next_usn < state.first_usn`) with transparent volume rebuild (`IndexUpdate::ReplaceVolume`) and explanatory issue reporting.
+  - USN Journal recreation recovery with updated identifier adoption.
+  - Out-of-bounds checkpoint corruption recovery.
+  - Explicit non-silent rejection of unsupported filesystems (FAT32, exFAT, ReFS) with `ErrorKind::Unsupported`.
+  - Non-elevated / permission-denied volume isolation with `ErrorKind::PermissionDenied`.
+  - Multi-volume fault tolerance preserving valid volume results when individual drives fail.
+  - Expanded test suite to 171 passed tests across 9 test suites with 0 Clippy warnings under strict no-panic linting.
+
 
 

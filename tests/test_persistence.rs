@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use oxifind::{
     persistence::{
         AppSettings, PersistenceError, load_settings, load_snapshot, save_settings, save_snapshot,
@@ -172,7 +174,7 @@ fn test_settings_save_and_load_roundtrip() {
 #[test]
 fn test_worker_cold_start_and_recovery_workflow() {
     use oxifind::engine::{
-        IndexScope, WorkerCommand, WorkerResponse, spawn_search_worker_with_snapshot,
+        IndexScope, WorkerResponse, spawn_search_worker_with_snapshot,
     };
     use std::sync::mpsc;
 

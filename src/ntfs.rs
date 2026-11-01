@@ -176,7 +176,6 @@ impl<I: VolumeInspector, E: MftRecordEnumerator> NtfsMftSource<I, E> {
     }
 }
 
-#[cfg(test)]
 impl<I, E, J> NtfsMftSource<I, E, J> {
     /// Creates a source with an injected journal reader for deterministic
     /// checkpoint tests.
@@ -377,7 +376,6 @@ impl
     }
 }
 
-#[cfg(test)]
 impl<I, E, J> NtfsMultiVolumeSource<I, E, J> {
     /// Creates a source from already-constructed single-volume sources.
     ///

@@ -186,10 +186,10 @@ entries was benchmarked and reduced by 16x from ~350 ms down to ~21 ms.
    limits.
 4. [ ] Package a signed Windows executable and document installation, permissions,
    diagnostics, and uninstallation.
-5. [ ] Add integration tests for first-run indexing, restart, journal recovery,
+5. [x] Add integration tests for first-run indexing, restart, journal recovery,
    and unsupported volumes.
 
-**Progress:** Items 1, 2, and 3 are complete. An atomic persistence module
+**Progress:** Items 1, 2, 3, and 5 are complete. An atomic persistence module
 (`src/persistence.rs`) serializes index snapshots and journal checkpoints with
 a binary header (`OXIFIND1`), version tracking, payload length, and CRC32
 integrity checksums. Snapshots are written via atomic temporary files and renames
@@ -197,7 +197,11 @@ to eliminate partial or broken writes. Corruption or version mismatches are safe
 caught and handled without panicking. Platform-specific application data directories
 and JSON application settings (`AppSettings`) support configurable indexed volumes,
 pattern exclusions, and result limits. Dedicated integration tests verify roundtrips,
-tamper detection, and index recreation.
+tamper detection, index recreation, continuous USN journal updates, journal wrap/purge
+gap detection and full volume rebuilds, USN journal recreation recovery, invalid checkpoint
+corruption handling, explicit non-silent rejection of unsupported filesystems (FAT32/exFAT),
+permission-denied volume isolation, and multi-volume partial failure resilience across 9 test suites
+with 171 passed tests.
 
 **Exit criteria:** The application can be installed, restarted, and recovered
 without requiring manual index management.

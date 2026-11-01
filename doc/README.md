@@ -44,7 +44,12 @@ experience built in Rust with strict quality standards.
   the term ranks first, then a file name containing it, then a matching path.
 - Deterministic case-insensitive ordering for equally ranked results, plus
   `sort:` terms for name, path, and folder-first ordering.
-- Asynchronous search execution to keep the UI responsive while typing.
+- Asynchronous search execution to keep the UI responsive while typing, with
+  worker-side queue draining that discards superseded queries during rapid typing.
+- Near-instant search filtering on indexes with hundreds of thousands of files:
+  zero-allocation search scoring with pre-computed lowercase metadata, non-allocating
+  case-insensitive string comparisons, Top-K partition selection (`select_nth_unstable_by`),
+  and multi-threaded parallel chunk filtering (`std::thread::scope`).
 - Initial indexing runs in a background worker so the UI remains responsive.
 - Startup status shows the index root, elapsed indexing time, and any
   inaccessible child paths.

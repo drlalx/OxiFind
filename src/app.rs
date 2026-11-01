@@ -12,15 +12,13 @@ use std::{
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 
+#[cfg(windows)]
+use crate::ntfs::{NtfsMftSource, NtfsMultiVolumeSource, local_fixed_volumes};
 use crate::{
     crawler::DirectorySource,
     platform::{self, OpenAction, open_path},
-    search::{
-        IndexSource, JournalCheckpoint, SearchIndex, SearchResult, UpdateBatch,
-    },
+    search::{IndexSource, JournalCheckpoint, SearchIndex, SearchResult, UpdateBatch},
 };
-#[cfg(windows)]
-use crate::ntfs::{NtfsMftSource, NtfsMultiVolumeSource, local_fixed_volumes};
 
 const RESULT_LIMIT: usize = 200;
 const UPDATE_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -436,10 +434,7 @@ impl SearchApp {
         };
         match action {
             RowAction::Open(open) => {
-                if let Err(error) = row
-                    .action_path()
-                    .and_then(|path| open_path(&path, open))
-                {
+                if let Err(error) = row.action_path().and_then(|path| open_path(&path, open)) {
                     self.notice = Some(format!("Could not open {}: {error}", row.path));
                 }
             }
@@ -852,7 +847,26 @@ fn run_search_worker<S: IndexSource + Send + 'static>(
     spawn_update_poller(source, index.journal_checkpoints().to_vec(), command_tx);
 
     let mut latest = SearchRequest::default();
-    while let Ok(command) = command_rx.recv() {
+    while let Ok(mut command) = command_rx.recv() {
+        if let WorkerCommand::Search(_) = command {
+            while let Ok(next) = command_rx.try_recv() {
+                match next {
+                    WorkerCommand::Search(newer_request) => {
+                        command = WorkerCommand::Search(newer_request);
+                    }
+                    other => {
+                        if response_tx
+                            .send(handle_command(&mut index, &mut latest, command))
+                            .is_err()
+                        {
+                            return;
+                        }
+                        command = other;
+                        break;
+                    }
+                }
+            }
+        }
         if response_tx
             .send(handle_command(&mut index, &mut latest, command))
             .is_err()
@@ -965,7 +979,9 @@ fn is_volume_root(path: &Path) -> bool {
             Some(Component::Prefix(prefix))
                 if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
         );
-        is_drive && matches!(components.next(), Some(Component::RootDir)) && components.next().is_none()
+        is_drive
+            && matches!(components.next(), Some(Component::RootDir))
+            && components.next().is_none()
     }
     #[cfg(not(windows))]
     {

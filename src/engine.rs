@@ -7,14 +7,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{
-    crawler::DirectorySource,
-    search::{
-        IndexSource, JournalCheckpoint, SearchIndex, SearchResult, UpdateBatch,
-    },
-};
 #[cfg(windows)]
 use crate::ntfs::{NtfsMftSource, NtfsMultiVolumeSource, local_fixed_volumes};
+use crate::{
+    crawler::DirectorySource,
+    search::{IndexSource, JournalCheckpoint, SearchIndex, SearchResult, UpdateBatch},
+};
 
 pub const RESULT_LIMIT: usize = 200;
 pub const UPDATE_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -191,18 +189,12 @@ pub fn spawn_search_worker<N: WorkerNotifier>(
             notifier,
         ),
         #[cfg(windows)]
-        IndexScope::Root(root) if is_volume_root(&root) => run_search_worker(
-            NtfsMftSource::new(root),
-            command_tx,
-            command_rx,
-            notifier,
-        ),
-        IndexScope::Root(root) => run_search_worker(
-            DirectorySource::new(root),
-            command_tx,
-            command_rx,
-            notifier,
-        ),
+        IndexScope::Root(root) if is_volume_root(&root) => {
+            run_search_worker(NtfsMftSource::new(root), command_tx, command_rx, notifier)
+        }
+        IndexScope::Root(root) => {
+            run_search_worker(DirectorySource::new(root), command_tx, command_rx, notifier)
+        }
     });
 }
 
@@ -236,7 +228,26 @@ fn run_search_worker<S: IndexSource + Send + 'static, N: WorkerNotifier>(
     spawn_update_poller(source, index.journal_checkpoints().to_vec(), command_tx);
 
     let mut latest = SearchRequest::default();
-    while let Ok(command) = command_rx.recv() {
+    while let Ok(mut command) = command_rx.recv() {
+        if let WorkerCommand::Search(_) = command {
+            while let Ok(next) = command_rx.try_recv() {
+                match next {
+                    WorkerCommand::Search(newer_request) => {
+                        command = WorkerCommand::Search(newer_request);
+                    }
+                    other => {
+                        if notifier
+                            .notify(handle_command(&mut index, &mut latest, command))
+                            .is_err()
+                        {
+                            return;
+                        }
+                        command = other;
+                        break;
+                    }
+                }
+            }
+        }
         if notifier
             .notify(handle_command(&mut index, &mut latest, command))
             .is_err()
@@ -364,5 +375,65 @@ pub fn split_result_path(path_str: &str) -> (String, String) {
         (name, folder)
     } else {
         (path_str.to_owned(), String::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn skips_stale_search_commands_in_worker() {
+        let (command_tx, command_rx) = mpsc::channel();
+        let (response_tx, response_rx) = mpsc::channel();
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("oxifind-eng-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let file_path = temp_dir.join("testfile.txt");
+        let _ = std::fs::write(&file_path, "hello");
+
+        spawn_search_worker(
+            IndexScope::Root(temp_dir.clone()),
+            command_tx.clone(),
+            command_rx,
+            response_tx,
+        );
+
+        let mut ready = false;
+        while let Ok(resp) = response_rx.recv() {
+            if let WorkerResponse::IndexReady { .. } = resp {
+                ready = true;
+                break;
+            }
+        }
+        assert!(ready);
+
+        let _ = command_tx.send(WorkerCommand::Search(SearchRequest {
+            revision: 1,
+            query: "t".to_owned(),
+        }));
+        let _ = command_tx.send(WorkerCommand::Search(SearchRequest {
+            revision: 2,
+            query: "te".to_owned(),
+        }));
+        let _ = command_tx.send(WorkerCommand::Search(SearchRequest {
+            revision: 3,
+            query: "test".to_owned(),
+        }));
+
+        let mut last_rev = 0;
+        while let Ok(resp) = response_rx.recv() {
+            if let WorkerResponse::SearchResults(SearchResponse { revision, .. }) = resp {
+                last_rev = revision;
+                if revision == 3 {
+                    break;
+                }
+            }
+        }
+        assert_eq!(last_rev, 3);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

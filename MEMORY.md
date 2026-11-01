@@ -38,10 +38,14 @@
   whitespace outside double quotes separates terms, quotes are removed, and
   modifiers are only recognized before a quote (`path:` case-insensitive,
   then `^`, then `=`). Terms without text are dropped; no terms lists the
-  first entries. Every term must match; `score_term` ranks against the
-  lowercase `metadata.name` and `path`: name prefix 0, name contains 1, path
-  contains 2 (`^` only 0, `=` only whole name, `path:` only path). The entry
-  score is the sum over terms.
+  first entries. Every term must match; `score_term` ranks against
+  pre-lowercased `metadata.name` and `path` stored in `SearchData`: name prefix 0,
+  name contains 1, path contains 2 (`^` only 0, `=` only whole name, `path:` only path).
+  The entry score is the sum over terms. Parallelized chunk filtering (`std::thread::scope`),
+  zero-allocation case-insensitive comparisons, and Top-K selection (`select_nth_unstable_by`)
+  ensure near-instant filtering on large indexes.
+- Workers in `app.rs` and `engine.rs` drain queued search commands, skipping stale
+  requests when typing rapidly so the search worker always evaluates only the latest revision.
 - `parse_query` returns a `Query` with terms and a `SortOrder`. A `sort:`
   term (case-insensitive, before quotes) selects `SortKey::Relevance`,
   `Name`, `Path`, or `Type` (directory attribute first), reversed by a

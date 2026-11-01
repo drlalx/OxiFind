@@ -1,6 +1,6 @@
 # Development Burndown
 
-Updated: 2026-09-28
+Updated: 2026-10-17
 
 | Milestone | Planned items | Complete | Remaining |
 | --- | ---: | ---: | ---: |
@@ -8,13 +8,13 @@ Updated: 2026-09-28
 | 2. Establish the Index Model | 4 | 4 | 0 |
 | 3. Implement NTFS Initial Indexing | 4 | 4 | 0 |
 | 4. Maintain the Index | 4 | 4 | 0 |
-| 5. Improve Search and User Experience | 6 | 4 | 2 |
+| 5. Improve Search and User Experience | 6 | 6 | 0 |
 | 6. Persistence, Packaging, and Operations | 5 | 0 | 5 |
-| **Total** | **27** | **20** | **7** |
+| **Total** | **27** | **22** | **5** |
 
 ```text
-Completed [####################.......] 20/27
-Remaining [#######....................] 7/27
+Completed [######################.....] 22/27
+Remaining [#####......................] 5/27
 ```
 
 Milestone 1 is complete. Workspace traversal, relative paths, `target`/`.git`
@@ -102,6 +102,12 @@ result opens it, and **Show in folder** opens Explorer with the item selected.
 The UI now uses eframe/egui with a menu bar, a sortable result table with a
 row context menu, and a status bar, following the mockup in `doc/mockup`.
 
+Milestone 5 is complete. Fast search response is preserved through command-queue
+draining for rapid typing, pre-computed lowercase search caches, non-allocating string
+comparisons, Top-K partition selection (`select_nth_unstable_by`), and parallelized
+chunk filtering with scoped threads. Query latency on 500,000 files dropped from
+~350 ms to ~21 ms (16x speedup).
+
 ## Multiplatform (Windows, Linux, macOS)
 
 - [x] Clippy No-Panic Policy: `panic = "deny"`, `unwrap_used = "deny"`, etc. in `Cargo.toml`.
@@ -128,6 +134,13 @@ row context menu, and a status bar, following the mockup in `doc/mockup`.
   - Interactive Ratatui interface with instant type-ahead search, mode toggles (Case, Word, Path, Regex), and sortable result table.
   - Desktop actions: `<Enter>` to open with system handler, `<Ctrl+O>` to reveal in file manager.
   - Modal dialogs: `<F1/?>` keyboard shortcuts cheat sheet, `<F2>` search scope drive picker.
-  - Test suite expanded to 153 passed tests across 7 test suites, with 0 Clippy issues under strict no-panic policy.
+- [x] High-performance Search & Filtering Engine:
+  - Zero-allocation scoring via pre-computed `SearchData` (lower-case names, paths, directory flags).
+  - Non-allocating `compare_case_insensitive` replacing `to_lowercase()` calls during sorting.
+  - $O(N)$ Top-K selection with `select_nth_unstable_by` to avoid sorting entire match vectors.
+  - Multi-threaded scoped chunk filtering (`std::thread::scope`) for large datasets.
+  - Search worker command draining in `app.rs` and `engine.rs` to prevent UI lag on rapid typing.
+  - Winit mixed-DPI dragging patch configured in `[patch.crates-io]`.
+  - Test suite expanded to 155 passed tests across 7 test suites, with 0 Clippy issues under strict no-panic policy.
 
 

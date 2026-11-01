@@ -41,3 +41,8 @@ unimplemented = "deny"
 todo = "deny"
 unreachable = "deny"
 
+[patch.crates-io]
+# Temporary workaround for mixed-DPI window dragging; remove after the fix ships in winit 0.30.x.
+winit = { git = "https://github.com/LunaticGhoulPiano/winit", rev = "39c4009c41e5977d779cf8a365792c8153ca77c5" }
+
+

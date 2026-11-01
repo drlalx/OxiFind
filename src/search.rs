@@ -138,8 +138,27 @@ impl IndexSource for WorkspaceSource {
     }
 }
 
+#[derive(Clone, Debug)]
+struct SearchData {
+    name_lower: String,
+    path_lower: String,
+    is_dir: bool,
+}
+
+fn build_search_data(entries: &[SearchEntry]) -> Vec<SearchData> {
+    entries
+        .iter()
+        .map(|entry| SearchData {
+            name_lower: entry.metadata.name.to_lowercase(),
+            path_lower: entry.path.to_lowercase(),
+            is_dir: is_directory(entry),
+        })
+        .collect()
+}
+
 pub struct SearchIndex {
     entries: Vec<SearchEntry>,
+    search_data: Vec<SearchData>,
     issues: Vec<IndexIssue>,
     resolution_issues: Vec<IndexIssue>,
     journal_checkpoints: Vec<JournalCheckpoint>,
@@ -183,8 +202,10 @@ impl SearchIndex {
         let journal_checkpoints = source.collect_snapshot(&mut entries, &mut issues)?;
         let resolution_issues = resolve_entry_paths(&mut entries);
         entries.sort_by(compare_entries);
+        let search_data = build_search_data(&entries);
         Ok(Self {
             entries,
+            search_data,
             issues,
             resolution_issues,
             journal_checkpoints,
@@ -286,6 +307,7 @@ impl SearchIndex {
         self.entries = slots.into_iter().flatten().collect();
         self.resolution_issues = resolve_entry_paths(&mut self.entries);
         self.entries.sort_by(compare_entries);
+        self.search_data = build_search_data(&self.entries);
     }
 
     pub fn len(&self) -> usize {
@@ -342,33 +364,93 @@ impl SearchIndex {
             return self.entries.iter().take(limit).collect();
         }
 
-        let mut matches: Vec<(u32, &SearchEntry)> = self
-            .entries
-            .iter()
-            .filter_map(|entry| score_entry(entry, &terms).map(|score| (score, entry)))
-            .collect();
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
 
-        matches.sort_by(|(left_score, left_entry), (right_score, right_entry)| {
-            let primary = match sort.key {
-                SortKey::Relevance => left_score.cmp(right_score),
-                SortKey::Name => {
-                    compare_text(&left_entry.metadata.name, &right_entry.metadata.name)
+        let mut matches: Vec<(u32, usize)> = if threads > 1 && self.search_data.len() >= 20_000 {
+            let chunk_size = self.search_data.len().div_ceil(threads);
+            std::thread::scope(|s| {
+                let mut handles = Vec::with_capacity(threads);
+                for (chunk_idx, chunk) in self.search_data.chunks(chunk_size).enumerate() {
+                    let base_idx = chunk_idx * chunk_size;
+                    let terms_ref = &terms;
+                    handles.push(s.spawn(move || {
+                        let mut local_matches = Vec::new();
+                        for (i, data) in chunk.iter().enumerate() {
+                            if let Some(score) =
+                                score_entry(&data.name_lower, &data.path_lower, terms_ref)
+                            {
+                                local_matches.push((score, base_idx + i));
+                            }
+                        }
+                        local_matches
+                    }));
                 }
-                SortKey::Path => compare_text(&left_entry.path, &right_entry.path),
-                SortKey::Type => is_directory(right_entry).cmp(&is_directory(left_entry)),
-            };
-            let primary = if sort.descending {
-                primary.reverse()
-            } else {
-                primary
-            };
-            primary
-                .then_with(|| left_score.cmp(right_score))
-                .then_with(|| compare_entries(left_entry, right_entry))
-        });
-        matches.truncate(limit);
+                let mut all = Vec::new();
+                for h in handles {
+                    if let Ok(local) = h.join() {
+                        all.extend(local);
+                    }
+                }
+                all
+            })
+        } else {
+            self.search_data
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, data)| {
+                    score_entry(&data.name_lower, &data.path_lower, &terms)
+                        .map(|score| (score, idx))
+                })
+                .collect()
+        };
 
-        matches.into_iter().map(|(_, entry)| entry).collect()
+        let compare_matches =
+            |&(left_score, left_idx): &(u32, usize), &(right_score, right_idx): &(u32, usize)| {
+                let primary = match sort.key {
+                    SortKey::Relevance => left_score.cmp(&right_score),
+                    SortKey::Name => self.search_data[left_idx]
+                        .name_lower
+                        .cmp(&self.search_data[right_idx].name_lower)
+                        .then_with(|| {
+                            self.entries[left_idx]
+                                .metadata
+                                .name
+                                .cmp(&self.entries[right_idx].metadata.name)
+                        }),
+                    SortKey::Path => self.search_data[left_idx]
+                        .path_lower
+                        .cmp(&self.search_data[right_idx].path_lower)
+                        .then_with(|| {
+                            self.entries[left_idx]
+                                .path
+                                .cmp(&self.entries[right_idx].path)
+                        }),
+                    SortKey::Type => self.search_data[right_idx]
+                        .is_dir
+                        .cmp(&self.search_data[left_idx].is_dir),
+                };
+                let primary = if sort.descending {
+                    primary.reverse()
+                } else {
+                    primary
+                };
+                primary
+                    .then_with(|| left_score.cmp(&right_score))
+                    .then_with(|| left_idx.cmp(&right_idx))
+            };
+
+        if matches.len() > limit {
+            matches.select_nth_unstable_by(limit, compare_matches);
+            matches.truncate(limit);
+        }
+        matches.sort_by(compare_matches);
+
+        matches
+            .into_iter()
+            .map(|(_, idx)| &self.entries[idx])
+            .collect()
     }
 }
 
@@ -416,18 +498,46 @@ fn upsert_slot(
     slots.push(Some(entry));
 }
 
+fn compare_case_insensitive(left: &str, right: &str) -> Ordering {
+    if left.is_ascii() && right.is_ascii() {
+        let left_bytes = left.as_bytes();
+        let right_bytes = right.as_bytes();
+        let len = left_bytes.len().min(right_bytes.len());
+        for i in 0..len {
+            let l = left_bytes[i].to_ascii_lowercase();
+            let r = right_bytes[i].to_ascii_lowercase();
+            match l.cmp(&r) {
+                Ordering::Equal => continue,
+                ord => return ord,
+            }
+        }
+        return left_bytes.len().cmp(&right_bytes.len());
+    }
+
+    let mut left_chars = left.chars().flat_map(char::to_lowercase);
+    let mut right_chars = right.chars().flat_map(char::to_lowercase);
+    loop {
+        match (left_chars.next(), right_chars.next()) {
+            (Some(l), Some(r)) => match l.cmp(&r) {
+                Ordering::Equal => continue,
+                ord => return ord,
+            },
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (None, None) => return Ordering::Equal,
+        }
+    }
+}
+
 fn compare_entries(left: &SearchEntry, right: &SearchEntry) -> Ordering {
-    left.display
-        .to_lowercase()
-        .cmp(&right.display.to_lowercase())
+    compare_case_insensitive(&left.display, &right.display)
         .then_with(|| left.display.cmp(&right.display))
         .then_with(|| left.path.cmp(&right.path))
 }
 
+#[allow(dead_code)]
 fn compare_text(left: &str, right: &str) -> Ordering {
-    left.to_lowercase()
-        .cmp(&right.to_lowercase())
-        .then_with(|| left.cmp(right))
+    compare_case_insensitive(left, right).then_with(|| left.cmp(right))
 }
 
 fn is_directory(entry: &SearchEntry) -> bool {
@@ -543,21 +653,21 @@ fn split_terms(query: &str) -> Vec<String> {
 }
 
 /// Sums the per-term ranks (lower is better), or returns `None` when any term does not match.
-fn score_entry(entry: &SearchEntry, terms: &[QueryTerm]) -> Option<u32> {
-    let name = entry.metadata.name.to_lowercase();
-    let path = entry.path.to_lowercase();
-    terms.iter().try_fold(0_u32, |total, term| {
-        Some(total + score_term(term, &name, &path)?)
-    })
+fn score_entry(name_lower: &str, path_lower: &str, terms: &[QueryTerm]) -> Option<u32> {
+    let mut total = 0_u32;
+    for term in terms {
+        total += score_term(term, name_lower, path_lower)?;
+    }
+    Some(total)
 }
 
-fn score_term(term: &QueryTerm, name: &str, path: &str) -> Option<u32> {
+fn score_term(term: &QueryTerm, name_lower: &str, path_lower: &str) -> Option<u32> {
     let needle = term.needle.as_str();
     match term.kind {
-        TermKind::Contains | TermKind::Prefix if name.starts_with(needle) => Some(0),
-        TermKind::Exact if name == needle => Some(0),
-        TermKind::Contains if name.contains(needle) => Some(1),
-        TermKind::Contains | TermKind::Path if path.contains(needle) => Some(2),
+        TermKind::Contains | TermKind::Prefix if name_lower.starts_with(needle) => Some(0),
+        TermKind::Exact if name_lower == needle => Some(0),
+        TermKind::Contains if name_lower.contains(needle) => Some(1),
+        TermKind::Contains | TermKind::Path if path_lower.contains(needle) => Some(2),
         _ => None,
     }
 }
@@ -943,10 +1053,7 @@ mod tests {
 
         let index = SearchIndex::from_source(&WorkspaceSource::new(root)).unwrap();
 
-        let expected_nested = Path::new("nested")
-            .join("bravo.txt")
-            .display()
-            .to_string();
+        let expected_nested = Path::new("nested").join("bravo.txt").display().to_string();
         assert_eq!(
             index.search("", 10),
             vec!["alpha.txt", "nested", &expected_nested],
@@ -1284,6 +1391,16 @@ mod tests {
         assert_eq!(large.len(), 100_000);
         assert_eq!(small[0].display, "file-000000.txt");
         assert_eq!(large[99_999].path, r"C:\fixture\file-099999.txt");
+    }
+
+    #[test]
+    fn filters_large_index_efficiently() {
+        let large = index(large_index_fixture());
+        let results = large.search("file", 200);
+        assert_eq!(results.len(), 200);
+
+        let results2 = large.search("042", 200);
+        assert_eq!(results2.len(), 200);
     }
 
     #[test]

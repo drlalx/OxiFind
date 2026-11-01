@@ -184,12 +184,12 @@ entries was benchmarked and reduced by 16x from ~350 ms down to ~21 ms.
    changes.
 3. [x] Add application settings for indexed volumes, excluded paths, and result
    limits.
-4. [ ] Package a signed Windows executable and document installation, permissions,
+4. [x] Package a signed Windows executable and document installation, permissions,
    diagnostics, and uninstallation.
 5. [x] Add integration tests for first-run indexing, restart, journal recovery,
    and unsupported volumes.
 
-**Progress:** Items 1, 2, 3, and 5 are complete. An atomic persistence module
+**Progress:** All items in Milestone 6 are complete. An atomic persistence module
 (`src/persistence.rs`) serializes index snapshots and journal checkpoints with
 a binary header (`OXIFIND1`), version tracking, payload length, and CRC32
 integrity checksums. Snapshots are written via atomic temporary files and renames
@@ -201,7 +201,10 @@ tamper detection, index recreation, continuous USN journal updates, journal wrap
 gap detection and full volume rebuilds, USN journal recreation recovery, invalid checkpoint
 corruption handling, explicit non-silent rejection of unsupported filesystems (FAT32/exFAT),
 permission-denied volume isolation, and multi-volume partial failure resilience across 9 test suites
-with 171 passed tests.
+with 171 passed tests. Packaging and operational readiness include an embedded Windows UAC application
+manifest (`oxifind.manifest`), Inno Setup installer script (`installer.iss`), PowerShell Authenticode
+code-signing automation (`sign-release.ps1`), multi-platform release CI workflows (`.github/workflows/ci.yml`),
+and comprehensive deployment/troubleshooting documentation (`doc/OPERATIONS.md`).
 
 **Exit criteria:** The application can be installed, restarted, and recovered
 without requiring manual index management.

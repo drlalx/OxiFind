@@ -9,12 +9,12 @@ Updated: 2026-11-01
 | 3. Implement NTFS Initial Indexing | 4 | 4 | 0 |
 | 4. Maintain the Index | 4 | 4 | 0 |
 | 5. Improve Search and User Experience | 6 | 6 | 0 |
-| 6. Persistence, Packaging, and Operations | 5 | 4 | 1 |
-| **Total** | **27** | **26** | **1** |
+| 6. Persistence, Packaging, and Operations | 5 | 5 | 0 |
+| **Total** | **27** | **27** | **0** |
 
 ```text
-Completed [##########################.] 26/27
-Remaining [#...........................] 1/27
+Completed [###########################] 27/27
+Remaining [...........................] 0/27
 ```
 
 Milestone 1 is complete. Workspace traversal, relative paths, `target`/`.git`
@@ -152,6 +152,13 @@ chunk filtering with scoped threads. Query latency on 500,000 files dropped from
   - Non-elevated / permission-denied volume isolation with `ErrorKind::PermissionDenied`.
   - Multi-volume fault tolerance preserving valid volume results when individual drives fail.
   - Expanded test suite to 171 passed tests across 9 test suites with 0 Clippy warnings under strict no-panic linting.
+- [x] Packaging, Operations, and Release Readiness:
+  - Windows UAC application manifest (`packaging/windows/oxifind.exe.manifest`) with DPI awareness, UTF-8 code page, and `asInvoker` privilege level.
+  - Inno Setup installer script (`packaging/windows/installer.iss`) supporting per-user/all-users installation, PATH integration, Explorer folder/drive context menu registration, and clean uninstallation.
+  - Automated Authenticode PowerShell signing script (`packaging/windows/sign-release.ps1`) with SHA-256 dual timestamping and verification.
+  - Multiplatform GitHub Actions release bundling (`.github/workflows/ci.yml`) for Windows (.zip), Linux (.tar.gz), and macOS (.tar.gz).
+  - Operations & Deployment Guide (`doc/OPERATIONS.md`) covering installation, privilege models, persistence architecture, troubleshooting, and uninstallation.
+
 
 
 

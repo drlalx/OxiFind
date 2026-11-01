@@ -34,3 +34,41 @@ jobs:
 
       - name: Cargo Test
         run: cargo test --all-targets -- --nocapture
+
+      - name: Build Release Binary
+        run: cargo build --release
+
+      - name: Package Windows Artifacts
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/windows
+          Copy-Item target/release/oxifind.exe dist/windows/
+          Copy-Item packaging/windows/oxifind.exe.manifest dist/windows/
+          Copy-Item README.md dist/windows/
+          Copy-Item LICENSE dist/windows/
+          Compress-Archive -Path dist/windows/* -DestinationPath dist/oxifind-windows-x86_64.zip
+
+      - name: Package Linux Artifacts
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          mkdir -p dist/linux
+          cp target/release/oxifind dist/linux/
+          cp packaging/linux/oxifind.desktop dist/linux/
+          cp README.md LICENSE dist/linux/
+          tar -czf dist/oxifind-linux-x86_64.tar.gz -C dist/linux .
+
+      - name: Package macOS Artifacts
+        if: matrix.os == 'macos-latest'
+        run: |
+          mkdir -p dist/macos
+          cp target/release/oxifind dist/macos/
+          cp packaging/macos/Info.plist dist/macos/
+          cp README.md LICENSE dist/macos/
+          tar -czf dist/oxifind-macos-x86_64.tar.gz -C dist/macos .
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oxifind-${{ matrix.os }}
+          path: dist/*.*

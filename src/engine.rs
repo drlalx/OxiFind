@@ -173,6 +173,20 @@ pub fn spawn_search_worker<N: WorkerNotifier>(
     command_rx: mpsc::Receiver<WorkerCommand>,
     notifier: N,
 ) {
+    let snapshot_path = match &scope {
+        IndexScope::LocalDrives => Some(crate::persistence::default_snapshot_path()),
+        _ => None,
+    };
+    spawn_search_worker_with_snapshot(scope, command_tx, command_rx, notifier, snapshot_path);
+}
+
+pub fn spawn_search_worker_with_snapshot<N: WorkerNotifier>(
+    scope: IndexScope,
+    command_tx: mpsc::Sender<WorkerCommand>,
+    command_rx: mpsc::Receiver<WorkerCommand>,
+    notifier: N,
+    snapshot_path: Option<PathBuf>,
+) {
     thread::spawn(move || match scope {
         #[cfg(windows)]
         IndexScope::LocalDrives => run_search_worker(
@@ -180,6 +194,7 @@ pub fn spawn_search_worker<N: WorkerNotifier>(
             command_tx,
             command_rx,
             notifier,
+            snapshot_path,
         ),
         #[cfg(not(windows))]
         IndexScope::LocalDrives => run_search_worker(
@@ -187,14 +202,23 @@ pub fn spawn_search_worker<N: WorkerNotifier>(
             command_tx,
             command_rx,
             notifier,
+            snapshot_path,
         ),
         #[cfg(windows)]
-        IndexScope::Root(root) if is_volume_root(&root) => {
-            run_search_worker(NtfsMftSource::new(root), command_tx, command_rx, notifier)
-        }
-        IndexScope::Root(root) => {
-            run_search_worker(DirectorySource::new(root), command_tx, command_rx, notifier)
-        }
+        IndexScope::Root(root) if is_volume_root(&root) => run_search_worker(
+            NtfsMftSource::new(root),
+            command_tx,
+            command_rx,
+            notifier,
+            snapshot_path,
+        ),
+        IndexScope::Root(root) => run_search_worker(
+            DirectorySource::new(root),
+            command_tx,
+            command_rx,
+            notifier,
+            snapshot_path,
+        ),
     });
 }
 
@@ -203,15 +227,41 @@ fn run_search_worker<S: IndexSource + Send + 'static, N: WorkerNotifier>(
     command_tx: mpsc::Sender<WorkerCommand>,
     command_rx: mpsc::Receiver<WorkerCommand>,
     notifier: N,
+    snapshot_path: Option<PathBuf>,
 ) {
     let indexing_started = Instant::now();
-    let mut index = match SearchIndex::from_source(&source) {
-        Ok(index) => index,
-        Err(error) => {
-            let _ = notifier.notify(WorkerResponse::IndexingFailed(error.to_string()));
-            return;
+    let mut loaded_from_cache = false;
+
+    let mut index = if let Some(ref path) = snapshot_path {
+        match crate::persistence::load_snapshot(path) {
+            Ok(Some(persisted)) => {
+                loaded_from_cache = true;
+                SearchIndex::from_persisted(persisted.entries, persisted.checkpoints)
+            }
+            _ => match SearchIndex::from_source(&source) {
+                Ok(index) => index,
+                Err(error) => {
+                    let _ = notifier.notify(WorkerResponse::IndexingFailed(error.to_string()));
+                    return;
+                }
+            },
+        }
+    } else {
+        match SearchIndex::from_source(&source) {
+            Ok(index) => index,
+            Err(error) => {
+                let _ = notifier.notify(WorkerResponse::IndexingFailed(error.to_string()));
+                return;
+            }
         }
     };
+
+    if let Some(ref path) = snapshot_path
+        && !loaded_from_cache
+    {
+        let _ =
+            crate::persistence::save_snapshot(path, index.journal_checkpoints(), index.entries());
+    }
 
     if notifier
         .notify(WorkerResponse::IndexReady {
@@ -237,7 +287,12 @@ fn run_search_worker<S: IndexSource + Send + 'static, N: WorkerNotifier>(
                     }
                     other => {
                         if notifier
-                            .notify(handle_command(&mut index, &mut latest, command))
+                            .notify(handle_command(
+                                &mut index,
+                                &mut latest,
+                                command,
+                                snapshot_path.as_deref(),
+                            ))
                             .is_err()
                         {
                             return;
@@ -249,7 +304,12 @@ fn run_search_worker<S: IndexSource + Send + 'static, N: WorkerNotifier>(
             }
         }
         if notifier
-            .notify(handle_command(&mut index, &mut latest, command))
+            .notify(handle_command(
+                &mut index,
+                &mut latest,
+                command,
+                snapshot_path.as_deref(),
+            ))
             .is_err()
         {
             return;
@@ -261,6 +321,7 @@ fn handle_command(
     index: &mut SearchIndex,
     latest: &mut SearchRequest,
     command: WorkerCommand,
+    snapshot_path: Option<&Path>,
 ) -> WorkerResponse {
     match command {
         WorkerCommand::Search(request) => {
@@ -273,6 +334,13 @@ fn handle_command(
         }
         WorkerCommand::ApplyUpdates(batch) => {
             index.apply(batch);
+            if let Some(path) = snapshot_path {
+                let _ = crate::persistence::save_snapshot(
+                    path,
+                    index.journal_checkpoints(),
+                    index.entries(),
+                );
+            }
             WorkerResponse::IndexUpdated {
                 indexed_items: index.len(),
                 indexing_issues: index.indexing_issue_count(),

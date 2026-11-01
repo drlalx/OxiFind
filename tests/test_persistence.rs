@@ -168,3 +168,96 @@ fn test_settings_save_and_load_roundtrip() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_worker_cold_start_and_recovery_workflow() {
+    use oxifind::engine::{
+        IndexScope, WorkerCommand, WorkerResponse, spawn_search_worker_with_snapshot,
+    };
+    use std::sync::mpsc;
+
+    let temp_dir = std::env::temp_dir().join(format!("oxifind-cold-test-{}", std::process::id()));
+    let _ = fs::create_dir_all(&temp_dir);
+    let sample_file = temp_dir.join("first_run.txt");
+    fs::write(&sample_file, "indexed content").unwrap();
+
+    let snapshot_file = temp_dir.join("index.snapshot");
+    assert!(!snapshot_file.exists());
+
+    // Run 1: First run without snapshot
+    let (cmd_tx1, cmd_rx1) = mpsc::channel();
+    let (resp_tx1, resp_rx1) = mpsc::channel();
+
+    spawn_search_worker_with_snapshot(
+        IndexScope::Root(temp_dir.clone()),
+        cmd_tx1,
+        cmd_rx1,
+        resp_tx1,
+        Some(snapshot_file.clone()),
+    );
+
+    let mut ready1 = false;
+    while let Ok(resp) = resp_rx1.recv() {
+        if let WorkerResponse::IndexReady { indexed_items, .. } = resp {
+            assert!(indexed_items >= 1);
+            ready1 = true;
+            break;
+        }
+    }
+    assert!(ready1);
+    assert!(
+        snapshot_file.exists(),
+        "Snapshot must be persisted after first run"
+    );
+
+    // Run 2: Restart from persisted snapshot
+    let (cmd_tx2, cmd_rx2) = mpsc::channel();
+    let (resp_tx2, resp_rx2) = mpsc::channel();
+
+    spawn_search_worker_with_snapshot(
+        IndexScope::Root(temp_dir.clone()),
+        cmd_tx2,
+        cmd_rx2,
+        resp_tx2,
+        Some(snapshot_file.clone()),
+    );
+
+    let mut ready2 = false;
+    while let Ok(resp) = resp_rx2.recv() {
+        if let WorkerResponse::IndexReady { indexed_items, .. } = resp {
+            assert!(indexed_items >= 1);
+            ready2 = true;
+            break;
+        }
+    }
+    assert!(ready2);
+
+    // Run 3: Corrupt snapshot and verify safe fallback
+    let mut bytes = fs::read(&snapshot_file).unwrap();
+    let len = bytes.len();
+    bytes[len - 2] ^= 0xFF; // Corrupt payload
+    fs::write(&snapshot_file, bytes).unwrap();
+
+    let (cmd_tx3, cmd_rx3) = mpsc::channel();
+    let (resp_tx3, resp_rx3) = mpsc::channel();
+
+    spawn_search_worker_with_snapshot(
+        IndexScope::Root(temp_dir.clone()),
+        cmd_tx3,
+        cmd_rx3,
+        resp_tx3,
+        Some(snapshot_file.clone()),
+    );
+
+    let mut ready3 = false;
+    while let Ok(resp) = resp_rx3.recv() {
+        if let WorkerResponse::IndexReady { indexed_items, .. } = resp {
+            assert!(indexed_items >= 1);
+            ready3 = true;
+            break;
+        }
+    }
+    assert!(ready3, "Worker must recover safely from corrupt snapshot");
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 240" width="880" height="240">
+  <defs>
+    <linearGradient id="bannerBgF1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f1117"/>
+      <stop offset="55%" stop-color="#151922"/>
+      <stop offset="100%" stop-color="#0c0e14"/>
+    </linearGradient>
+
+    <linearGradient id="bannerBorderF1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ff6b35" stop-opacity="0.75"/>
+      <stop offset="50%" stop-color="#2b3140" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#00f0ff" stop-opacity="0.75"/>
+    </linearGradient>
+
+    <linearGradient id="oxiTextGradF1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff8c61"/>
+      <stop offset="50%" stop-color="#ff6b35"/>
+      <stop offset="100%" stop-color="#de4c36"/>
+    </linearGradient>
+
+    <radialGradient id="lensGlassB1" cx="40%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#1f2838"/>
+      <stop offset="65%" stop-color="#121622"/>
+      <stop offset="100%" stop-color="#0b0d14"/>
+    </radialGradient>
+
+    <linearGradient id="copperRimB1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff9f68"/>
+      <stop offset="45%" stop-color="#ff6b35"/>
+      <stop offset="100%" stop-color="#b8331a"/>
+    </linearGradient>
+
+    <linearGradient id="cyanSheenB1" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#00f0ff" stop-opacity="0.55"/>
+      <stop offset="50%" stop-color="#0077b6" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#00f0ff" stop-opacity="0.0"/>
+    </linearGradient>
+
+    <linearGradient id="copperSheenB1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff7b47" stop-opacity="0.55"/>
+      <stop offset="60%" stop-color="#de4c36" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#9e2a1b" stop-opacity="0.0"/>
+    </linearGradient>
+
+    <linearGradient id="handleGradB1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff6b35"/>
+      <stop offset="50%" stop-color="#de4c36"/>
+      <stop offset="100%" stop-color="#00f0ff"/>
+    </linearGradient>
+
+    <linearGradient id="treeGradB1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f0ff"/>
+      <stop offset="55%" stop-color="#ff6b35"/>
+      <stop offset="100%" stop-color="#ffbe0b"/>
+    </linearGradient>
+
+    <filter id="glowFB1" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="3.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <clipPath id="lensClipB1">
+      <circle cx="108" cy="108" r="66"/>
+    </clipPath>
+  </defs>
+
+  <!-- Banner Card Background -->
+  <rect x="4" y="4" width="872" height="232" rx="28" fill="url(#bannerBgF1)" stroke="url(#bannerBorderF1)" stroke-width="2.5"/>
+
+  <!-- Subtle Background Search Index Wave Lines -->
+  <path d="M 260 195 Q 420 155, 560 190 T 860 165" fill="none" stroke="#ff6b35" stroke-width="1.2" stroke-opacity="0.12"/>
+  <path d="M 260 205 Q 450 170, 610 200 T 860 185" fill="none" stroke="#00f0ff" stroke-width="1.2" stroke-opacity="0.12"/>
+
+  <!-- Embedded Scalable Vector Icon on Left -->
+  <g transform="translate(22, 4) scale(0.9)">
+    <g filter="url(#glowFB1)">
+      <line x1="156" y1="156" x2="212" y2="212" stroke="#161922" stroke-width="22" stroke-linecap="round"/>
+      <line x1="156" y1="156" x2="212" y2="212" stroke="url(#handleGradB1)" stroke-width="14" stroke-linecap="round"/>
+      <line x1="160" y1="160" x2="208" y2="208" stroke="#ffffff" stroke-width="2.2" stroke-opacity="0.55" stroke-linecap="round"/>
+    </g>
+    <path d="M 149 163 L 163 149 L 175 161 L 161 175 Z" fill="#ff7b47" opacity="0.9"/>
+
+    <g clip-path="url(#lensClipB1)">
+      <circle cx="108" cy="108" r="66" fill="url(#lensGlassB1)"/>
+      <path d="M108,108 L36,48 A90,90 0 0,1 98,36 Z" fill="url(#copperSheenB1)"/>
+      <path d="M108,108 L168,52 A90,90 0 0,1 180,104 Z" fill="url(#cyanSheenB1)"/>
+      <circle cx="108" cy="108" r="54" fill="none" stroke="#00f0ff" stroke-width="0.9" stroke-opacity="0.25" stroke-dasharray="14 6"/>
+      <circle cx="108" cy="108" r="40" fill="none" stroke="#ff8c61" stroke-width="0.8" stroke-opacity="0.2"/>
+      <line x1="40" y1="114" x2="176" y2="114" stroke="#00f0ff" stroke-width="1.5" stroke-opacity="0.45"/>
+
+      <g filter="url(#glowFB1)">
+        <path d="M 74 78 L 104 78 L 112 86 L 142 86
+                 M 90 78 L 90 134 L 134 134
+                 M 90 108 L 126 108"
+              fill="none" stroke="url(#treeGradB1)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      </g>
+      <rect x="64" y="68" width="22" height="18" rx="3.5" fill="#ff6b35" stroke="#ffffff" stroke-width="1.2"/>
+      <circle cx="126" cy="108" r="6.5" fill="#00f0ff"/>
+      <circle cx="126" cy="108" r="3" fill="#ffffff"/>
+      <circle cx="134" cy="134" r="6" fill="#ffbe0b"/>
+      <circle cx="134" cy="134" r="2.5" fill="#ffffff"/>
+      <circle cx="142" cy="86" r="4.5" fill="#ff7b47"/>
+    </g>
+
+    <circle cx="108" cy="108" r="68" fill="none" stroke="#161922" stroke-width="9"/>
+    <circle cx="108" cy="108" r="68" fill="none" stroke="url(#copperRimB1)" stroke-width="5"/>
+    <circle cx="108" cy="108" r="62.5" fill="none" stroke="#00f0ff" stroke-width="1.2" stroke-opacity="0.65"/>
+  </g>
+
+  <!-- Typography & Branding -->
+  <text x="265" y="102" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif" font-size="68" font-weight="800" letter-spacing="-1.5">
+    <tspan fill="url(#oxiTextGradF1)">Oxi</tspan><tspan fill="#f8f9fa">Find</tspan>
+  </text>
+
+  <!-- Subtitle -->
+  <text x="268" y="140" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif" font-size="19" font-weight="500" fill="#adb5bd" letter-spacing="0.4">
+    Ultra-Fast Multiplatform Instant File Search in Rust
+  </text>
+
+  <!-- Feature Pills -->
+  <g transform="translate(268, 162)" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, monospace" font-size="13" font-weight="600">
+    <rect x="0" y="0" width="196" height="30" rx="15" fill="#1c2230" stroke="#ff6b35" stroke-width="1.2" stroke-opacity="0.6"/>
+    <text x="98" y="20" fill="#ff9f68" text-anchor="middle">NTFS MFT • USN • Notify</text>
+
+    <rect x="210" y="0" width="196" height="30" rx="15" fill="#1c2230" stroke="#00f0ff" stroke-width="1.2" stroke-opacity="0.5"/>
+    <text x="308" y="20" fill="#72efdd" text-anchor="middle">Windows • Linux • macOS</text>
+
+    <rect x="420" y="0" width="148" height="30" rx="15" fill="#1c2230" stroke="#8d99ae" stroke-width="1.2" stroke-opacity="0.4"/>
+    <text x="494" y="20" fill="#e9ecef" text-anchor="middle">egui GUI &amp; TUI</text>
+  </g>
+</svg>

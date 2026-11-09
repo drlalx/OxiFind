@@ -8,6 +8,8 @@
     <string>io.github.oxifind</string>
     <key>CFBundleName</key>
     <string>OxiFind</string>
+    <key>CFBundleIconFile</key>
+    <string>oxifind</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

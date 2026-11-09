@@ -151,7 +151,10 @@ pub enum IndexScope {
 impl fmt::Display for IndexScope {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(windows)]
             Self::LocalDrives => formatter.write_str("all local drives"),
+            #[cfg(not(windows))]
+            Self::LocalDrives => formatter.write_str("all local filesystems"),
             Self::Root(root) => write!(formatter, "{}", root.display()),
         }
     }
@@ -446,6 +449,107 @@ pub fn split_result_path(path_str: &str) -> (String, String) {
     }
 }
 
+pub fn run_service(
+    scope: IndexScope,
+    delay_seconds: u32,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!("==> OxiFind Background Service initializing...");
+
+    if delay_seconds > 0 {
+        println!("==> Startup delay: waiting {delay_seconds} seconds before indexing / monitoring...");
+        thread::sleep(Duration::from_secs(delay_seconds as u64));
+    }
+
+    // One source instance is used for the initial load, the watcher and polling: the watcher
+    // state lives in the instance, so a second instance would never report any change.
+    #[cfg(windows)]
+    let source = match &scope {
+        IndexScope::LocalDrives => NtfsMultiVolumeSource::new(local_fixed_volumes()),
+        IndexScope::Root(root) if is_volume_root(root) => NtfsMftSource::new(root.clone()),
+        IndexScope::Root(root) => DirectorySource::new(root.clone()),
+    };
+    #[cfg(not(windows))]
+    let source = match &scope {
+        IndexScope::LocalDrives => DirectorySource::local_drives(),
+        IndexScope::Root(root) => DirectorySource::new(root.clone()),
+    };
+
+    let snapshot_path = crate::persistence::default_snapshot_path();
+
+    println!(
+        "==> Checking for existing database snapshot at {}...",
+        snapshot_path.display()
+    );
+    let mut index = match crate::persistence::load_snapshot(&snapshot_path) {
+        Ok(Some(persisted)) if source.can_resume_from_snapshot() => {
+            println!(
+                "==> Reusing existing database with {} items (timestamp: {}).",
+                persisted.entries.len(),
+                persisted.timestamp_secs
+            );
+            for issue in source.start_watching() {
+                eprintln!("Warning: {}: {}", issue.path.display(), issue.message);
+            }
+            SearchIndex::from_persisted(persisted.entries, persisted.checkpoints)
+        }
+        other => {
+            if let Ok(Some(persisted)) = &other {
+                println!(
+                    "==> Existing snapshot with {} items cannot be reconciled for this source; rebuilding.",
+                    persisted.entries.len()
+                );
+            }
+            println!("==> No existing snapshot found. Starting full filesystem crawl for scope '{scope}'...");
+
+            let idx = SearchIndex::from_source(&source)?;
+            println!("==> Full scan complete: indexed {} items.", idx.len());
+            crate::persistence::save_snapshot(
+                &snapshot_path,
+                idx.journal_checkpoints(),
+                idx.entries(),
+            )?;
+            idx
+        }
+    };
+
+    println!("==> Background service active: monitoring filesystem for changes...");
+
+    let mut checkpoints = index.journal_checkpoints().to_vec();
+
+    loop {
+        thread::sleep(UPDATE_POLL_INTERVAL);
+        match poll_updates(&source, &mut checkpoints) {
+            ControlFlow::Break(()) => {
+                println!("==> Source update polling completed.");
+                break;
+            }
+            ControlFlow::Continue(Some(WorkerCommand::ApplyUpdates(batch))) => {
+                let batch_size = batch.updates.len();
+                index.apply(batch);
+                if let Err(e) = crate::persistence::save_snapshot(
+                    &snapshot_path,
+                    index.journal_checkpoints(),
+                    index.entries(),
+                ) {
+                    eprintln!("Warning: Failed to save updated snapshot: {e}");
+                } else {
+                    println!(
+                        "==> Applied {batch_size} change(s). Database updated: {} items.",
+                        index.len()
+                    );
+                }
+            }
+            ControlFlow::Continue(Some(WorkerCommand::UpdateFailed(msg))) => {
+                eprintln!("Warning: {msg}");
+            }
+            ControlFlow::Continue(None) => {}
+            ControlFlow::Continue(Some(WorkerCommand::Search(_))) => {}
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,5 +607,18 @@ mod tests {
         assert_eq!(last_rev, 3);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn formats_index_scope_display_appropriately_for_platform() {
+        #[cfg(windows)]
+        assert_eq!(format!("{}", IndexScope::LocalDrives), "all local drives");
+        #[cfg(not(windows))]
+        assert_eq!(format!("{}", IndexScope::LocalDrives), "all local filesystems");
+
+        assert_eq!(
+            format!("{}", IndexScope::Root(PathBuf::from("/test/path"))),
+            "/test/path"
+        );
     }
 }

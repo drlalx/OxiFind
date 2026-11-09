@@ -3,6 +3,7 @@
 pub mod desktop;
 pub mod elevation;
 pub mod mounts;
+pub mod service;
 
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use desktop::explorer_argument;

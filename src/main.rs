@@ -23,6 +23,65 @@ fn main() {
         return;
     }
 
+    if let Some(action) = config.service_action {
+        match action {
+            oxifind::backend::ServiceAction::Run { delay_seconds } => {
+                if let Err(error) = oxifind::engine::run_service(config.scope, delay_seconds) {
+                    eprintln!("Service error: {error}");
+                    std::process::exit(1);
+                }
+            }
+            oxifind::backend::ServiceAction::Install { delay_seconds } => {
+                match oxifind::platform::service::install_service(delay_seconds) {
+                    Ok(()) => println!("OxiFind background service successfully installed and enabled (startup delay: {delay_seconds}s)."),
+                    Err(error) => {
+                        eprintln!("Failed to install service: {error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            oxifind::backend::ServiceAction::Uninstall => {
+                match oxifind::platform::service::uninstall_service() {
+                    Ok(()) => println!("OxiFind background service successfully uninstalled and disabled."),
+                    Err(error) => {
+                        eprintln!("Failed to uninstall service: {error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            oxifind::backend::ServiceAction::Status => {
+                let status = oxifind::platform::service::service_status();
+                println!("OxiFind Service Status: {}", status.label());
+            }
+            oxifind::backend::ServiceAction::Start => {
+                match oxifind::platform::service::start_service() {
+                    Ok(()) => println!("OxiFind background service started."),
+                    Err(error) => {
+                        eprintln!("Failed to start service: {error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            oxifind::backend::ServiceAction::Stop => {
+                match oxifind::platform::service::stop_service() {
+                    Ok(()) => println!("OxiFind background service stopped."),
+                    Err(error) => {
+                        eprintln!("Failed to stop service: {error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    if let Some(ref renderer) = config.renderer {
+        // SAFETY: Called early in process startup before multi-threaded worker pools or GUI loops start.
+        unsafe {
+            std::env::set_var("WGPU_BACKEND", renderer);
+        }
+    }
+
     let ui = config.ui.unwrap_or_else(detect_default_ui);
 
     let result: Result<(), Box<dyn Error + Send + Sync>> = match ui {
@@ -51,14 +110,25 @@ fn main() {
 fn print_usage() {
     println!(
         "OxiFind - Fast multiplatform file search engine\n\n\
-         Usage: oxifind [OPTIONS] [INDEX_ROOT]\n\n\
+         Usage: oxifind [OPTIONS] [INDEX_ROOT]\n\
+                oxifind service <install|uninstall|status|start|stop|run> [--delay <secs>]\n\n\
          Options:\n  \
            --tui                    Launch Terminal UI (Ratatui)\n  \
            --gui                    Launch Desktop GUI (egui)\n  \
            --ui <egui|tui>          Select active UI backend\n  \
+           --gl, --opengl           Force OpenGL graphics backend (recommended for Linux Wayland)\n  \
+           --vulkan                 Force Vulkan graphics backend\n  \
+           --renderer <backend>     Set custom graphics backend (gl, vulkan)\n  \
+           --service, --daemon      Run headless background indexer & watcher\n  \
+           --delay <seconds>        Startup delay in seconds (default: 15 for service)\n  \
            --help, -h               Show this help message\n\n\
+         Commands:\n  \
+           service install          Install as background service (systemd / schtasks / launchd)\n  \
+           service uninstall        Remove background service\n  \
+           service status           Show current service state\n  \
+           service start / stop     Start or stop background service\n\n\
          Arguments:\n  \
-           [INDEX_ROOT]             Path or drive root to index (defaults to all local drives)"
+           [INDEX_ROOT]             Path or drive root to index (defaults to all local drives/filesystems)"
     );
 }
 

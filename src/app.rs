@@ -158,6 +158,7 @@ enum RowAction {
     Open(OpenAction),
     CopyName,
     CopyPath,
+    CopyFolderPath,
 }
 
 #[derive(Default)]
@@ -196,7 +197,34 @@ enum WorkerResponse {
     UpdateFailed(String),
 }
 
+/// Configures a reliable graphics backend for Linux if not explicitly specified.
+///
+/// On Linux (particularly under Wayland with Intel or hybrid graphics), the Vulkan
+/// backend in wgpu frequently causes swapchain alpha transparency issues and font texture atlas
+/// corruption. Setting `WGPU_BACKEND=gl` defaults to the stable OpenGL backend.
+#[cfg(target_os = "linux")]
+pub fn ensure_linux_graphics_backend() {
+    if let Some(backend) = default_graphics_backend(std::env::var_os("WGPU_BACKEND").as_deref()) {
+        // SAFETY: Called early in process startup before multi-threaded worker pools or GUI loops start.
+        unsafe {
+            std::env::set_var("WGPU_BACKEND", backend);
+        }
+    }
+}
+
+/// Returns the backend to set when the user has not chosen one; an explicit choice is never overridden.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn default_graphics_backend(current: Option<&std::ffi::OsStr>) -> Option<&'static str> {
+    match current {
+        Some(_) => None,
+        None => Some("gl"),
+    }
+}
+
 pub fn run(scope: IndexScope) -> Result<(), Box<dyn Error + Send + Sync>> {
+    #[cfg(target_os = "linux")]
+    ensure_linux_graphics_backend();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP_NAME)
@@ -238,6 +266,15 @@ impl ResponseSender {
     }
 }
 
+/// Results of background service work, delivered to the UI thread.
+enum ServiceEvent {
+    Status(platform::service::ServiceStatus),
+    Finished(String),
+}
+
+/// How long a cached service status is shown before the open Service menu asks again.
+const SERVICE_STATUS_REFRESH: Duration = Duration::from_secs(2);
+
 struct SearchApp {
     scope: IndexScope,
     request_tx: mpsc::Sender<WorkerCommand>,
@@ -257,6 +294,11 @@ struct SearchApp {
     show_syntax_help: bool,
     show_about: bool,
     focus_search: bool,
+    service_status: platform::service::ServiceStatus,
+    service_tx: mpsc::Sender<ServiceEvent>,
+    service_rx: mpsc::Receiver<ServiceEvent>,
+    service_busy: bool,
+    service_checked_at: Option<Instant>,
 }
 
 /// An app without a worker; `SearchApp::new` connects one.
@@ -281,6 +323,11 @@ impl Default for SearchApp {
             show_syntax_help: false,
             show_about: false,
             focus_search: true,
+            service_status: platform::service::ServiceStatus::NotInstalled,
+            service_tx: mpsc::channel().0,
+            service_rx: mpsc::channel().1,
+            service_busy: false,
+            service_checked_at: None,
         }
     }
 }
@@ -319,6 +366,47 @@ impl SearchApp {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.mark_worker_stopped();
                     break;
+                }
+            }
+        }
+    }
+
+    /// Queries the service status on a background thread; the result arrives via `drain_service_events`.
+    fn spawn_service_status_check(&mut self, ctx: &egui::Context) {
+        self.service_checked_at = Some(Instant::now());
+        let tx = self.service_tx.clone();
+        let ctx = ctx.clone();
+        thread::spawn(move || {
+            let _ = tx.send(ServiceEvent::Status(platform::service::service_status()));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Runs a blocking service action on a background thread so the UI never waits for `systemctl`,
+    /// `schtasks` or `launchctl`. The returned notice is shown when the action finishes.
+    fn spawn_service_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: impl FnOnce() -> String + Send + 'static,
+    ) {
+        self.service_busy = true;
+        let tx = self.service_tx.clone();
+        let ctx = ctx.clone();
+        thread::spawn(move || {
+            let _ = tx.send(ServiceEvent::Finished(action()));
+            ctx.request_repaint();
+        });
+    }
+
+    fn drain_service_events(&mut self) {
+        while let Ok(event) = self.service_rx.try_recv() {
+            match event {
+                ServiceEvent::Status(status) => self.service_status = status,
+                ServiceEvent::Finished(notice) => {
+                    self.service_busy = false;
+                    self.notice = Some(notice);
+                    // Force a fresh status query the next time the menu is shown.
+                    self.service_checked_at = None;
                 }
             }
         }
@@ -440,6 +528,7 @@ impl SearchApp {
             }
             RowAction::CopyName => ctx.copy_text(row.name.clone()),
             RowAction::CopyPath => ctx.copy_text(row.path.clone()),
+            RowAction::CopyFolderPath => ctx.copy_text(row.folder.clone()),
         }
     }
 
@@ -522,6 +611,12 @@ impl SearchApp {
             {
                 self.run_selected_action(ui.ctx(), RowAction::CopyPath);
             }
+            if ui
+                .add_enabled(has_selection, egui::Button::new("Copy folder path"))
+                .clicked()
+            {
+                self.run_selected_action(ui.ctx(), RowAction::CopyFolderPath);
+            }
             ui.separator();
             if ui
                 .add(egui::Button::new("Clear search").shortcut_text("Esc"))
@@ -578,6 +673,71 @@ impl SearchApp {
             {
                 self.run_selected_action(ui.ctx(), RowAction::Open(OpenAction::Reveal));
             }
+        });
+
+        ui.menu_button("Service", |ui| {
+            let ctx = ui.ctx().clone();
+            let stale = self
+                .service_checked_at
+                .is_none_or(|checked| checked.elapsed() >= SERVICE_STATUS_REFRESH);
+            if stale && !self.service_busy {
+                self.spawn_service_status_check(&ctx);
+            }
+            let busy = self.service_busy;
+            let status = self.service_status;
+            match status {
+                platform::service::ServiceStatus::Active => {
+                    ui.label("Status: \u{25CF} Aktiv (läuft im Hintergrund)");
+                    ui.separator();
+                    if ui.add_enabled(!busy, egui::Button::new("Dienst stoppen")).clicked() {
+                        self.spawn_service_action(&ctx, || match platform::service::stop_service() {
+                            Ok(()) => "Hintergrunddienst gestoppt.".to_owned(),
+                            Err(e) => format!("Fehler beim Stoppen: {e}"),
+                        });
+                    }
+                    if ui.add_enabled(!busy, egui::Button::new("Dienst deinstallieren")).clicked() {
+                        self.spawn_service_action(&ctx, || match platform::service::uninstall_service() {
+                            Ok(()) => "Hintergrunddienst erfolgreich deinstalliert.".to_owned(),
+                            Err(e) => format!("Fehler beim Deinstallieren: {e}"),
+                        });
+                    }
+                }
+                platform::service::ServiceStatus::Inactive => {
+                    ui.label("Status: \u{25CB} Inaktiv (gestoppt)");
+                    ui.separator();
+                    if ui.add_enabled(!busy, egui::Button::new("Dienst starten")).clicked() {
+                        self.spawn_service_action(&ctx, || match platform::service::start_service() {
+                            Ok(()) => "Hintergrunddienst gestartet.".to_owned(),
+                            Err(e) => format!("Fehler beim Starten: {e}"),
+                        });
+                    }
+                    if ui.add_enabled(!busy, egui::Button::new("Dienst deinstallieren")).clicked() {
+                        self.spawn_service_action(&ctx, || match platform::service::uninstall_service() {
+                            Ok(()) => "Hintergrunddienst deinstalliert.".to_owned(),
+                            Err(e) => format!("Fehler beim Deinstallieren: {e}"),
+                        });
+                    }
+                }
+                platform::service::ServiceStatus::NotInstalled => {
+                    ui.label("Status: Nicht installiert");
+                    ui.separator();
+                    if ui
+                        .add_enabled(
+                            !busy,
+                            egui::Button::new("Als Hintergrunddienst installieren (15s Verzögerung)..."),
+                        )
+                        .clicked()
+                    {
+                        self.spawn_service_action(&ctx, || match platform::service::install_service(15) {
+                            Ok(()) => "Hintergrunddienst erfolgreich installiert & gestartet (nutzt bestehende Datenbank, 15s Startverzögerung).".to_owned(),
+                            Err(e) => format!("Fehler bei Dienst-Installation: {e}"),
+                        });
+                    }
+                }
+            }
+            ui.separator();
+            ui.weak("Verwendet vorhandene Datenbank (index.snapshot)");
+            ui.weak("und aktualisiert bei Dateiänderungen.");
         });
 
         ui.menu_button("Help", |ui| {
@@ -676,19 +836,59 @@ impl SearchApp {
                         action = Some((index, RowAction::Open(OpenAction::Open)));
                     }
                     response.context_menu(|ui| {
-                        let items = [
-                            ("Open", RowAction::Open(OpenAction::Open)),
-                            ("Show in folder", RowAction::Open(OpenAction::Reveal)),
-                            ("Copy name", RowAction::CopyName),
-                            ("Copy full path", RowAction::CopyPath),
-                        ];
-                        for (position, (label, item)) in items.into_iter().enumerate() {
-                            if position == 2 {
-                                ui.separator();
-                            }
-                            if ui.button(label).clicked() {
-                                action = Some((index, item));
-                            }
+                        let is_folder = result.is_folder;
+                        let open_label = if is_folder {
+                            "Ordner öffnen"
+                        } else {
+                            "Öffnen"
+                        };
+                        if ui
+                            .add(egui::Button::new(open_label).shortcut_text("Enter"))
+                            .clicked()
+                        {
+                            action = Some((index, RowAction::Open(OpenAction::Open)));
+                            ui.close();
+                        }
+                        if !is_folder && ui.button("Öffnen mit...").clicked() {
+                            action = Some((index, RowAction::Open(OpenAction::OpenWith)));
+                            ui.close();
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new("Im Dateimanager anzeigen")
+                                    .shortcut_text("Ctrl+Enter"),
+                            )
+                            .clicked()
+                        {
+                            action = Some((index, RowAction::Open(OpenAction::Reveal)));
+                            ui.close();
+                        }
+                        if !is_folder
+                            && ui.button("Übergeordneten Ordner öffnen").clicked()
+                        {
+                            action = Some((index, RowAction::Open(OpenAction::OpenFolder)));
+                            ui.close();
+                        }
+
+                        ui.separator();
+
+                        if ui
+                            .add(
+                                egui::Button::new("Vollständigen Pfad kopieren")
+                                    .shortcut_text("Ctrl+Shift+C"),
+                            )
+                            .clicked()
+                        {
+                            action = Some((index, RowAction::CopyPath));
+                            ui.close();
+                        }
+                        if ui.button("Ordnerpfad kopieren").clicked() {
+                            action = Some((index, RowAction::CopyFolderPath));
+                            ui.close();
+                        }
+                        if ui.button("Dateinamen kopieren").clicked() {
+                            action = Some((index, RowAction::CopyName));
+                            ui.close();
                         }
                     });
                 });
@@ -746,7 +946,7 @@ impl SearchApp {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")));
-                ui.label("Fast file-name search for Windows.");
+                ui.label("Ultra-fast multiplatform file search for Windows, Linux, and macOS.");
                 ui.label(format!("Index scope: {}", self.scope));
             });
     }
@@ -755,6 +955,7 @@ impl SearchApp {
 impl eframe::App for SearchApp {
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_responses();
+        self.drain_service_events();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1330,13 +1531,21 @@ mod tests {
                 rows: vec![row],
                 ..SearchApp::default()
             };
-            for action in [OpenAction::Open, OpenAction::Reveal] {
+            for action in [
+                OpenAction::Open,
+                OpenAction::OpenWith,
+                OpenAction::Reveal,
+                OpenAction::OpenFolder,
+            ] {
                 app.run_row_action(&context, 0, RowAction::Open(action));
                 assert!(app.notice.as_deref().is_some_and(|notice| {
                     notice.contains("the indexed path could not be resolved")
                 }));
                 app.notice = None;
             }
+            app.run_row_action(&context, 0, RowAction::CopyFolderPath);
+            app.run_row_action(&context, 0, RowAction::CopyPath);
+            app.run_row_action(&context, 0, RowAction::CopyName);
         }
     }
 
@@ -1587,13 +1796,28 @@ mod tests {
 
     #[test]
     fn describes_the_local_drive_scope_in_the_status() {
+        #[cfg(windows)]
+        let expected_status = "Indexing all local drives...";
+        #[cfg(not(windows))]
+        let expected_status = "Indexing all local filesystems...";
+
         assert_eq!(
             format_indexing_status(IndexScope::LocalDrives),
-            "Indexing all local drives...",
+            expected_status,
         );
         assert_eq!(
             format_indexing_status(IndexScope::Root(r"D:\".into())),
             r"Indexing D:\...",
         );
+    }
+
+    #[test]
+    fn graphics_backend_default_applies_only_without_user_choice() {
+        use super::default_graphics_backend;
+        use std::ffi::OsStr;
+
+        assert_eq!(default_graphics_backend(None), Some("gl"));
+        assert_eq!(default_graphics_backend(Some(OsStr::new("vulkan"))), None);
+        assert_eq!(default_graphics_backend(Some(OsStr::new("gl"))), None);
     }
 }

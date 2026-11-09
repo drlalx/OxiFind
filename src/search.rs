@@ -99,6 +99,19 @@ pub trait IndexSource {
         Ok(checkpoints)
     }
 
+    /// Whether a saved snapshot can be continued with [`collect_updates`](Self::collect_updates).
+    /// Sources without a persistent change journal must return `false`: changes made while the
+    /// snapshot was stored would otherwise never be detected.
+    fn can_resume_from_snapshot(&self) -> bool {
+        true
+    }
+
+    /// Starts change monitoring on this instance without crawling, so that later [`collect_updates`](Self::collect_updates)
+    /// calls on the same instance report changes. Sources that do not need this keep the no-op default.
+    fn start_watching(&self) -> Vec<IndexIssue> {
+        Vec::new()
+    }
+
     /// Appends the changes recorded after each checkpoint in order and advances the checkpoints past them.
     fn collect_updates(
         &self,

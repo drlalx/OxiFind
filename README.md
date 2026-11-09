@@ -1,4 +1,10 @@
-# OxiFind
+# 🔍 OxiFind
+
+![OxiFind](resources/images/oxifind_banner.svg)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-2024%20Edition-orange.svg)](https://www.rust-lang.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-brightgreen.svg)]()
 
 OxiFind is a high-performance, multiplatform Rust application for ultra-fast, responsive name-based file
 search on Windows, Linux, and macOS. The project provides an instantaneous desktop search

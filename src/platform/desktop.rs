@@ -5,11 +5,16 @@ use std::{io, path::Path};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OpenAction {
     Open,
+    OpenWith,
     Reveal,
+    OpenFolder,
 }
 
 /// Opens `path` with the default application or reveals it in the platform file manager.
 pub fn open_path(path: &Path, action: OpenAction) -> io::Result<()> {
+    if action == OpenAction::OpenFolder {
+        return open_path(containing_folder(path), OpenAction::Open);
+    }
     #[cfg(windows)]
     {
         windows::open_in_explorer(path, action)
@@ -24,11 +29,23 @@ pub fn open_path(path: &Path, action: OpenAction) -> io::Result<()> {
     }
 }
 
+/// Returns the folder that contains `path`. A bare relative file name maps to the current directory
+/// (`.`), since an empty parent cannot be opened; a path without parent (a root) maps to itself.
+pub fn containing_folder(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if parent.as_os_str().is_empty() => Path::new("."),
+        Some(parent) => parent,
+        None => path,
+    }
+}
+
 /// Builds the raw Explorer argument; Windows paths cannot contain quotes, so quoting is safe.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn explorer_argument(path: &Path, action: OpenAction) -> String {
     match action {
-        OpenAction::Open => format!("\"{}\"", path.display()),
+        OpenAction::Open | OpenAction::OpenWith | OpenAction::OpenFolder => {
+            format!("\"{}\"", path.display())
+        }
         OpenAction::Reveal => format!("/select,\"{}\"", path.display()),
     }
 }
@@ -46,11 +63,22 @@ pub(crate) mod windows {
                 "paths containing quotes cannot be passed to Explorer",
             ));
         }
-        // Explorer reports a failure exit code even after opening successfully, so only spawning is checked.
-        Command::new("explorer.exe")
-            .raw_arg(explorer_argument(path, action))
-            .spawn()
-            .map(drop)
+        match action {
+            OpenAction::OpenWith => {
+                Command::new("rundll32.exe")
+                    .arg("shell32.dll,OpenAs_RunDLL")
+                    .arg(path)
+                    .spawn()
+                    .map(drop)
+            }
+            OpenAction::Open | OpenAction::Reveal | OpenAction::OpenFolder => {
+                // Explorer reports a failure exit code even after opening successfully, so only spawning is checked.
+                Command::new("explorer.exe")
+                    .raw_arg(explorer_argument(path, action))
+                    .spawn()
+                    .map(drop)
+            }
+        }
     }
 }
 
@@ -63,12 +91,30 @@ pub(crate) mod macos {
     pub fn open_in_finder(path: &Path, action: OpenAction) -> io::Result<()> {
         let mut command = Command::new("open");
         match action {
-            OpenAction::Open => {
+            OpenAction::Open | OpenAction::OpenFolder => {
                 command.arg(path);
             }
             OpenAction::Reveal => {
                 // -R reveals the file selected in Finder
                 command.arg("-R").arg(path);
+            }
+            OpenAction::OpenWith => {
+                // The path is passed as an argument, never interpolated into the script text,
+                // so quotes or backslashes in file names cannot change the script.
+                let script = "on run argv\n\
+                    tell application \"Finder\" to open POSIX file (item 1 of argv) using (choose application)\n\
+                    end run";
+                if let Ok(status) = Command::new("osascript")
+                    .arg("-e")
+                    .arg(script)
+                    .arg(path)
+                    .status()
+                {
+                    if status.success() {
+                        return Ok(());
+                    }
+                }
+                command.arg(path);
             }
         }
         command.spawn().map(drop)
@@ -93,9 +139,40 @@ pub(crate) mod linux {
 
     pub fn open_in_linux_desktop(path: &Path, action: OpenAction) -> io::Result<()> {
         match action {
-            OpenAction::Open => Command::new("xdg-open").arg(path).spawn().map(drop),
+            OpenAction::Open | OpenAction::OpenFolder => {
+                Command::new("xdg-open").arg(path).spawn().map(drop)
+            }
             OpenAction::Reveal => reveal_in_file_manager(path),
+            OpenAction::OpenWith => open_with_dialog(path),
         }
+    }
+
+    fn open_with_dialog(path: &Path) -> io::Result<()> {
+        let uri = file_uri(path);
+
+        // Try XDG Desktop Portal OpenURI with ask=true via gdbus
+        let gdbus_status = Command::new("gdbus")
+            .args([
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.portal.Desktop",
+                "--object-path",
+                "/org/freedesktop/portal/desktop",
+                "--method",
+                "org.freedesktop.portal.OpenURI.OpenURI",
+                "",
+                &uri,
+                "{'ask': <true>}",
+            ])
+            .status();
+
+        if gdbus_status.is_ok_and(|status| status.success()) {
+            return Ok(());
+        }
+
+        // Fallback: standard xdg-open
+        Command::new("xdg-open").arg(path).spawn().map(drop)
     }
 
     /// Reveals `path` selected in the active FreeDesktop file manager (GNOME Files, Dolphin, Thunar, etc.)
@@ -141,8 +218,10 @@ pub(crate) mod linux {
         }
 
         // Fallback: open parent folder via xdg-open
-        let folder = path.parent().unwrap_or(path);
-        Command::new("xdg-open").arg(folder).spawn().map(drop)
+        Command::new("xdg-open")
+            .arg(super::containing_folder(path))
+            .spawn()
+            .map(drop)
     }
 }
 
@@ -157,6 +236,8 @@ mod tests {
     #[test]
     fn open_actions_have_expected_variants() {
         assert_ne!(OpenAction::Open, OpenAction::Reveal);
+        assert_ne!(OpenAction::OpenWith, OpenAction::OpenFolder);
+        assert_ne!(OpenAction::Open, OpenAction::OpenWith);
     }
 
     #[test]
@@ -169,6 +250,20 @@ mod tests {
             "file:///home/user/document.txt"
         );
         assert_eq!(file_uri(Path::new("relative.txt")), "file:///relative.txt");
+    }
+
+    #[test]
+    fn containing_folder_of_relative_file_is_current_directory() {
+        assert_eq!(super::containing_folder(Path::new("file.txt")), Path::new("."));
+        assert_eq!(
+            super::containing_folder(Path::new("dir/file.txt")),
+            Path::new("dir")
+        );
+    }
+
+    #[test]
+    fn containing_folder_of_root_is_root() {
+        assert_eq!(super::containing_folder(Path::new("/")), Path::new("/"));
     }
 
     #[test]

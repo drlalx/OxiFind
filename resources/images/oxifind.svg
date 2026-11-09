@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <!-- Background Gradient (Matches OxiDisc) -->
+    <radialGradient id="bg1" cx="50%" cy="35%" r="75%">
+      <stop offset="0%" stop-color="#1e222d"/>
+      <stop offset="65%" stop-color="#11131a"/>
+      <stop offset="100%" stop-color="#090a0f"/>
+    </radialGradient>
+
+    <!-- Outer Border Gradient -->
+    <linearGradient id="border1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff6b35" stop-opacity="0.75"/>
+      <stop offset="50%" stop-color="#2c3242" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0.75"/>
+    </linearGradient>
+
+    <!-- Lens Glass Base -->
+    <radialGradient id="lensGlass1" cx="40%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#1f2838"/>
+      <stop offset="65%" stop-color="#121622"/>
+      <stop offset="100%" stop-color="#0b0d14"/>
+    </radialGradient>
+
+    <!-- Copper Rim Gradient -->
+    <linearGradient id="copperRim1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff9f68"/>
+      <stop offset="45%" stop-color="#ff6b35"/>
+      <stop offset="100%" stop-color="#b8331a"/>
+    </linearGradient>
+
+    <!-- Cyan Sheen -->
+    <linearGradient id="cyanSheen1" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#00f0ff" stop-opacity="0.55"/>
+      <stop offset="50%" stop-color="#0077b6" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#00f0ff" stop-opacity="0.0"/>
+    </linearGradient>
+
+    <!-- Copper Sheen -->
+    <linearGradient id="copperSheen1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff7b47" stop-opacity="0.55"/>
+      <stop offset="60%" stop-color="#de4c36" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#9e2a1b" stop-opacity="0.0"/>
+    </linearGradient>
+
+    <!-- Handle Gradient -->
+    <linearGradient id="handleGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff6b35"/>
+      <stop offset="50%" stop-color="#de4c36"/>
+      <stop offset="100%" stop-color="#00f0ff"/>
+    </linearGradient>
+
+    <!-- Tree Edge Gradient -->
+    <linearGradient id="treeGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f0ff"/>
+      <stop offset="55%" stop-color="#ff6b35"/>
+      <stop offset="100%" stop-color="#ffbe0b"/>
+    </linearGradient>
+
+    <!-- Glow Filters -->
+    <filter id="glow1" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="3.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="softGlow1" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="5.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <clipPath id="lensClip1">
+      <circle cx="108" cy="108" r="66"/>
+    </clipPath>
+  </defs>
+
+  <!-- App Icon Squircle Background -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg1)" stroke="url(#border1)" stroke-width="3"/>
+
+  <!-- Subtle Background Grid / File Rows Outside Lens -->
+  <g stroke="#ffffff" stroke-opacity="0.06" stroke-width="1.5" stroke-linecap="round">
+    <line x1="36" y1="72" x2="180" y2="72"/>
+    <line x1="36" y1="96" x2="180" y2="96"/>
+    <line x1="36" y1="120" x2="180" y2="120"/>
+    <line x1="36" y1="144" x2="180" y2="144"/>
+  </g>
+
+  <!-- Magnifying Glass Handle -->
+  <g filter="url(#softGlow1)">
+    <line x1="156" y1="156" x2="212" y2="212" stroke="#161922" stroke-width="22" stroke-linecap="round"/>
+    <line x1="156" y1="156" x2="212" y2="212" stroke="url(#handleGrad1)" stroke-width="14" stroke-linecap="round"/>
+    <line x1="160" y1="160" x2="208" y2="208" stroke="#ffffff" stroke-width="2.2" stroke-opacity="0.55" stroke-linecap="round"/>
+  </g>
+  <!-- Ferrule / Collar connecting lens and handle -->
+  <path d="M 149 163 L 163 149 L 175 161 L 161 175 Z" fill="#ff7b47" opacity="0.9"/>
+
+  <!-- Ambient Glow Around Lens -->
+  <circle cx="108" cy="108" r="74" fill="none" stroke="#ff6b35" stroke-width="2" stroke-opacity="0.22"/>
+
+  <!-- Lens Interior -->
+  <g clip-path="url(#lensClip1)">
+    <circle cx="108" cy="108" r="66" fill="url(#lensGlass1)"/>
+
+    <!-- Dual Iridescent Reflections (Oxi family hallmark) -->
+    <path d="M108,108 L36,48 A90,90 0 0,1 98,36 Z" fill="url(#copperSheen1)"/>
+    <path d="M108,108 L168,52 A90,90 0 0,1 180,104 Z" fill="url(#cyanSheen1)"/>
+
+    <!-- Concentric Index Ring inside Lens -->
+    <circle cx="108" cy="108" r="54" fill="none" stroke="#00f0ff" stroke-width="0.9" stroke-opacity="0.25" stroke-dasharray="14 6"/>
+    <circle cx="108" cy="108" r="40" fill="none" stroke="#ff8c61" stroke-width="0.8" stroke-opacity="0.2"/>
+
+    <!-- Laser Scan Line across Lens -->
+    <line x1="40" y1="114" x2="176" y2="114" stroke="#00f0ff" stroke-width="1.5" stroke-opacity="0.45"/>
+
+    <!-- Illuminated File / Index Tree inside Lens -->
+    <g filter="url(#glow1)">
+      <path d="M 74 78 L 104 78 L 112 86 L 142 86
+               M 90 78 L 90 134 L 134 134
+               M 90 108 L 126 108"
+            fill="none" stroke="url(#treeGrad1)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <!-- Index Nodes / File Hits -->
+    <rect x="64" y="68" width="22" height="18" rx="3.5" fill="#ff6b35" stroke="#ffffff" stroke-width="1.2"/>
+    <circle cx="126" cy="108" r="6.5" fill="#00f0ff" filter="url(#glow1)"/>
+    <circle cx="126" cy="108" r="3" fill="#ffffff"/>
+    <circle cx="134" cy="134" r="6" fill="#ffbe0b" filter="url(#glow1)"/>
+    <circle cx="134" cy="134" r="2.5" fill="#ffffff"/>
+    <circle cx="142" cy="86" r="4.5" fill="#ff7b47"/>
+  </g>
+
+  <!-- Outer Metallic Lens Rim -->
+  <circle cx="108" cy="108" r="68" fill="none" stroke="#161922" stroke-width="9"/>
+  <circle cx="108" cy="108" r="68" fill="none" stroke="url(#copperRim1)" stroke-width="5"/>
+  <circle cx="108" cy="108" r="62.5" fill="none" stroke="#00f0ff" stroke-width="1.2" stroke-opacity="0.65"/>
+  <circle cx="108" cy="108" r="71.5" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-opacity="0.25"/>
+</svg>

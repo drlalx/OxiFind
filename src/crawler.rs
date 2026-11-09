@@ -150,6 +150,16 @@ impl DirectorySource {
 }
 
 impl IndexSource for DirectorySource {
+    fn start_watching(&self) -> Vec<IndexIssue> {
+        let (dir_watcher, watch_issues) = DirectoryWatcher::new(&self.roots, &self.exclusions);
+        let mut guard = match self.watcher.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        *guard = Some(dir_watcher);
+        watch_issues
+    }
+
     fn collect_initial(
         &self,
         out: &mut Vec<SearchEntry>,
@@ -163,15 +173,7 @@ impl IndexSource for DirectorySource {
         out: &mut Vec<SearchEntry>,
         issues: &mut Vec<IndexIssue>,
     ) -> io::Result<Vec<JournalCheckpoint>> {
-        let (dir_watcher, watch_issues) = DirectoryWatcher::new(&self.roots, &self.exclusions);
-        issues.extend(watch_issues);
-        {
-            let mut guard = match self.watcher.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
-            *guard = Some(dir_watcher);
-        }
+        issues.extend(self.start_watching());
 
         self.collect_initial(out, issues)?;
 
@@ -199,6 +201,11 @@ impl IndexSource for DirectorySource {
             }
         }
         Ok(())
+    }
+
+    fn can_resume_from_snapshot(&self) -> bool {
+        // Directory watching has no persistent journal: changes made while stopped are unknown.
+        false
     }
 
     fn journal_checkpoints(&self) -> io::Result<Vec<JournalCheckpoint>> {
@@ -578,5 +585,36 @@ mod tests {
         let mut issues = Vec::new();
         let result = source.collect_initial(&mut entries, &mut issues);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn directory_snapshots_are_not_resumed() {
+        let temp = TemporaryDirectory::new();
+        let source = DirectorySource::new(temp.path());
+        assert!(!source.can_resume_from_snapshot());
+    }
+
+    #[test]
+    fn start_watching_reports_changes_without_full_crawl() {
+        let temp = TemporaryDirectory::new();
+        let source = DirectorySource::new(temp.path());
+        let _ = source.start_watching();
+
+        fs::write(temp.path().join("created_later.txt"), "new").unwrap();
+
+        let mut checkpoints = source.journal_checkpoints().unwrap();
+        let mut updates = Vec::new();
+        let mut issues = Vec::new();
+        for _ in 0..50 {
+            source
+                .collect_updates(&mut checkpoints, &mut updates, &mut issues)
+                .unwrap();
+            if !updates.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        assert!(!updates.is_empty(), "expected the new file to be reported");
     }
 }

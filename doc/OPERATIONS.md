@@ -187,3 +187,41 @@ rm -rf ~/.local/share/oxifind ~/.config/oxifind
 # On macOS:
 rm -rf ~/Library/Application\ Support/OxiFind
 ```
+
+---
+
+## 5. Background Service & Daemon Mode (Syncthing-like)
+
+OxiFind can operate as an autonomous background daemon/service (similar to Syncthing), continuously monitoring filesystems and updating the database snapshot without requiring an open window.
+
+### Features
+* **Automated & Delayed Startup:** When starting at system boot or user login, the service runs with a configurable delay (default `15s`) to prevent disk I/O contention during login.
+* **Database Reuse:** Automatically loads and reuses the existing persistent database (`index.snapshot`). Only incremental changes are applied.
+* **Low System Priority:** On Linux, the systemd unit runs with `Nice=19` and `IOSchedulingClass=idle`, ensuring zero impact on foreground desktop performance.
+* **Instant GUI Start:** When launching the GUI or TUI while the service is active, search is instantaneous because the in-memory database is pre-cached on disk.
+
+### Management via GUI Menu
+* In the OxiFind Desktop GUI, open the **Service** menu to view the current status:
+  * **Status:** `Aktiv`, `Inaktiv`, or `Nicht installiert`
+  * **Install:** Click *„Als Hintergrunddienst installieren (15s Verzögerung)...“*
+  * **Start / Stop / Uninstall:** Direct controls right within the application.
+
+### Management via CLI
+```bash
+# Install and enable background service (systemd --user on Linux)
+oxifind service install --delay 15
+
+# Query service status
+oxifind service status
+
+# Start / stop service
+oxifind service start
+oxifind service stop
+
+# Uninstall background service
+oxifind service uninstall
+
+# Run daemon directly in foreground/terminal
+oxifind --service --delay 10
+```
+

@@ -463,15 +463,15 @@ pub fn run_service(
     // One source instance is used for the initial load, the watcher and polling: the watcher
     // state lives in the instance, so a second instance would never report any change.
     #[cfg(windows)]
-    let source = match &scope {
-        IndexScope::LocalDrives => NtfsMultiVolumeSource::new(local_fixed_volumes()),
-        IndexScope::Root(root) if is_volume_root(root) => NtfsMftSource::new(root.clone()),
-        IndexScope::Root(root) => DirectorySource::new(root.clone()),
+    let source: Box<dyn IndexSource> = match &scope {
+        IndexScope::LocalDrives => Box::new(NtfsMultiVolumeSource::new(local_fixed_volumes())),
+        IndexScope::Root(root) if is_volume_root(root) => Box::new(NtfsMftSource::new(root.clone())),
+        IndexScope::Root(root) => Box::new(DirectorySource::new(root.clone())),
     };
     #[cfg(not(windows))]
-    let source = match &scope {
-        IndexScope::LocalDrives => DirectorySource::local_drives(),
-        IndexScope::Root(root) => DirectorySource::new(root.clone()),
+    let source: Box<dyn IndexSource> = match &scope {
+        IndexScope::LocalDrives => Box::new(DirectorySource::local_drives()),
+        IndexScope::Root(root) => Box::new(DirectorySource::new(root.clone())),
     };
 
     let snapshot_path = crate::persistence::default_snapshot_path();

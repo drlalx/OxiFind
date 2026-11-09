@@ -136,6 +136,46 @@ pub struct WorkspaceSource {
 }
 
 #[allow(dead_code)]
+/// Lets a boxed source (for example a platform-selected one) be used wherever an `IndexSource` is expected.
+impl<S: IndexSource + ?Sized> IndexSource for Box<S> {
+    fn collect_initial(
+        &self,
+        out: &mut Vec<SearchEntry>,
+        issues: &mut Vec<IndexIssue>,
+    ) -> io::Result<()> {
+        (**self).collect_initial(out, issues)
+    }
+
+    fn collect_snapshot(
+        &self,
+        out: &mut Vec<SearchEntry>,
+        issues: &mut Vec<IndexIssue>,
+    ) -> io::Result<Vec<JournalCheckpoint>> {
+        (**self).collect_snapshot(out, issues)
+    }
+
+    fn collect_updates(
+        &self,
+        checkpoints: &mut [JournalCheckpoint],
+        out: &mut Vec<IndexUpdate>,
+        issues: &mut Vec<IndexIssue>,
+    ) -> io::Result<()> {
+        (**self).collect_updates(checkpoints, out, issues)
+    }
+
+    fn journal_checkpoints(&self) -> io::Result<Vec<JournalCheckpoint>> {
+        (**self).journal_checkpoints()
+    }
+
+    fn start_watching(&self) -> Vec<IndexIssue> {
+        (**self).start_watching()
+    }
+
+    fn can_resume_from_snapshot(&self) -> bool {
+        (**self).can_resume_from_snapshot()
+    }
+}
+
 impl WorkspaceSource {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }

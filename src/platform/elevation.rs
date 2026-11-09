@@ -7,7 +7,8 @@ use std::{ffi::OsString, io};
 pub fn is_elevated() -> bool {
     use std::mem;
 
-    use windows::Win32::{
+    // `::windows` names the crate: a local `mod windows` in this file would shadow it.
+    use ::windows::Win32::{
         Foundation::{CloseHandle, HANDLE},
         Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
         System::Threading::{GetCurrentProcess, OpenProcessToken},

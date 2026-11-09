@@ -24,9 +24,9 @@
     "semantic_hash": ""
   },
   "src/crawler.rs": {
-    "mtime": 1794259781.8437297,
-    "seen": 1794259844.8542879,
-    "ast_hash": "1edc81fb719f800137ec5d28b85fc6e8",
+    "mtime": 1794264063.1272738,
+    "seen": 1794264076.9108584,
+    "ast_hash": "4840cf63a6305e2678961d97e10ea1c9",
     "semantic_hash": ""
   },
   "src/engine.rs": {

@@ -44,4 +44,4 @@ Stand nach zweiter Runde: alle Befunde umgesetzt bis auf die oben genannten Veri
 
 Windows-Prüfung (pcdrju, Windows 10, Branch `fix/service-review-findings`): `cargo build`, `cargo clippy --all-targets` ohne Warnungen und `cargo test` grün. Dabei gefundene, bereits vorhandene Windows-Compile-Fehler sind behoben (`elevation.rs` Crate-Pfad, Typ-Mismatch der Quellen in `run_service`). Der Test `retains_workspace_entries_and_reports_inaccessible_directories` überspringt sich auf pcdrju, weil der Testbenutzer Administrator mit `SeBackupPrivilege` ist.
 
-Nicht geprüft: die tatsächliche Ausführung von `schtasks /create`, `/delete` und des Dienstes unter Windows (würde Tasks auf dem Rechner anlegen), macOS komplett.
+Auf pcdrju geprüft: `schtasks /create ... /delay 0001:30` wird akzeptiert und als `PT1M30S` gespeichert. Das alte Format `0000:90` wird mit „Die Daten sind unzulässig“ abgelehnt (Befund 6 bestätigt). Der Test-Task wurde danach wieder gelöscht. Nicht geprüft: der Dienstlauf selbst (Task wurde nicht gestartet) und macOS komplett.

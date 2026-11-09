@@ -30,9 +30,9 @@
     "semantic_hash": ""
   },
   "src/engine.rs": {
-    "mtime": 1794259781.8443754,
-    "seen": 1794259844.8542972,
-    "ast_hash": "771272d6922b29d450884419e5b3eeb8",
+    "mtime": 1794262409.3802142,
+    "seen": 1794262431.9456937,
+    "ast_hash": "d9abbcc4015b21cf0e1802bc8410d801",
     "semantic_hash": ""
   },
   "src/lib.rs": {
@@ -60,9 +60,9 @@
     "semantic_hash": ""
   },
   "src/platform/elevation.rs": {
-    "mtime": 1793568005.4833052,
-    "seen": 1793568047.4810755,
-    "ast_hash": "e8e9c9f4e372eb7a49dd57c3077968c8",
+    "mtime": 1794262409.3796453,
+    "seen": 1794262431.9457078,
+    "ast_hash": "30be2645369d8162d05b8ee0fd8d3b4c",
     "semantic_hash": ""
   },
   "src/platform/mod.rs": {
@@ -78,9 +78,9 @@
     "semantic_hash": ""
   },
   "src/search.rs": {
-    "mtime": 1794259781.838984,
-    "seen": 1794259844.8543985,
-    "ast_hash": "5a6bd17294e03d8ae76d5be7341834ca",
+    "mtime": 1794262409.3800027,
+    "seen": 1794262431.9457161,
+    "ast_hash": "b94dd280e1b4b5486560742c56884863",
     "semantic_hash": ""
   },
   "src/tui/app.rs": {

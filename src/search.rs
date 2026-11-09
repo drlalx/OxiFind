@@ -1185,6 +1185,11 @@ mod tests {
         fs::write(root.join("open").join("alpha.txt"), "").unwrap();
         fs::write(locked.join("hidden.txt"), "").unwrap();
         let _denied_listing = DeniedListing::apply(locked.clone());
+        if fs::read_dir(&locked).is_ok() {
+            // Administrators with the backup privilege bypass the deny ACE; the scenario cannot be produced here.
+            eprintln!("skipped: the environment can list directories denied by ACL");
+            return;
+        }
 
         let index = SearchIndex::from_source(&WorkspaceSource::new(root)).unwrap();
 

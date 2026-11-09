@@ -78,9 +78,9 @@
     "semantic_hash": ""
   },
   "src/search.rs": {
-    "mtime": 1794262409.3800027,
-    "seen": 1794262431.9457161,
-    "ast_hash": "b94dd280e1b4b5486560742c56884863",
+    "mtime": 1794262988.6301165,
+    "seen": 1794262993.094237,
+    "ast_hash": "5d5df7aa795b6776c12ba7150694ea3e",
     "semantic_hash": ""
   },
   "src/tui/app.rs": {

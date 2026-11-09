@@ -17,9 +17,14 @@ use crate::{
     watcher::DirectoryWatcher,
 };
 
+// Only computed on non-Windows targets; Windows reads the native attributes.
+#[cfg_attr(windows, allow(dead_code))]
 const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
+#[cfg_attr(windows, allow(dead_code))]
 const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
+#[cfg_attr(windows, allow(dead_code))]
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+#[cfg_attr(windows, allow(dead_code))]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 /// Multi-threaded crawler that indexes directories across any platform.
@@ -452,6 +457,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    #[cfg_attr(windows, allow(unused_imports))]
     use super::{DirectorySource, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN};
     use crate::search::IndexSource;
 

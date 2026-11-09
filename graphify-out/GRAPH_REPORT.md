@@ -1,7 +1,7 @@
 # Graph Report - OxiFind  (2026-11-09)
 
 ## Corpus Check
-- 47 files · ~53,082 words
+- 47 files · ~53,112 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 8 file(s) not represented in the graph (top: (none) 3, .toml 1, .desktop 1)
 
@@ -11,7 +11,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `7916f490`
+- Built from commit: `0ec4527d`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -90,27 +90,27 @@
 10. `collect_entries()` - 25 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `test_worker_cold_start_and_recovery_workflow()` --calls--> `spawn_search_worker_with_snapshot()`  [INFERRED]
-  tests/test_persistence.rs → src/engine.rs
 - `test_first_run_snapshot_and_cold_start_recovery()` --calls--> `load_snapshot()`  [INFERRED]
   tests/test_journal_recovery.rs → src/persistence.rs
 - `test_load_non_existent_snapshot_returns_none()` --calls--> `load_snapshot()`  [INFERRED]
   tests/test_persistence.rs → src/persistence.rs
 - `test_first_run_snapshot_and_cold_start_recovery()` --calls--> `save_snapshot()`  [INFERRED]
   tests/test_journal_recovery.rs → src/persistence.rs
+- `test_worker_cold_start_and_recovery_workflow()` --calls--> `spawn_search_worker_with_snapshot()`  [INFERRED]
+  tests/test_persistence.rs → src/engine.rs
 - `sample_entries()` --references--> `SearchEntry`  [EXTRACTED]
   tests/test_persistence.rs → src/search.rs
 
 ## Import Cycles
-- 1-file cycle: `src/crawler.rs -> src/crawler.rs`
-- 1-file cycle: `src/ntfs.rs -> src/ntfs.rs`
 - 1-file cycle: `src/search.rs -> src/search.rs`
 - 1-file cycle: `src/app.rs -> src/app.rs`
-- 1-file cycle: `src/main.rs -> src/main.rs`
-- 1-file cycle: `src/platform/elevation.rs -> src/platform/elevation.rs`
+- 1-file cycle: `src/crawler.rs -> src/crawler.rs`
+- 1-file cycle: `src/ntfs.rs -> src/ntfs.rs`
 - 1-file cycle: `src/watcher.rs -> src/watcher.rs`
 - 1-file cycle: `src/platform/desktop.rs -> src/platform/desktop.rs`
+- 1-file cycle: `src/main.rs -> src/main.rs`
 - 1-file cycle: `src/platform/service.rs -> src/platform/service.rs`
+- 1-file cycle: `src/platform/elevation.rs -> src/platform/elevation.rs`
 - 1-file cycle: `src/platform/mounts.rs -> src/platform/mounts.rs`
 - 2-file cycle: `src/crawler.rs -> src/watcher.rs -> src/crawler.rs`
 
@@ -313,24 +313,24 @@ Cohesion: 0.29
 Nodes (5): assert_snapshot_rename_is_replayed(), multi_volume_source_defaults_to_no_selected_volumes(), NtfsMultiVolumeSource<I, E, J>, retains_the_checkpoint_before_multi_volume_enumeration(), retains_the_checkpoint_before_single_volume_enumeration()
 
 ## Knowledge Gaps
-- **61 isolated node(s):** `Relevance`, `Name`, `Path`, `Type`, `Size` (+56 more)
+- **61 isolated node(s):** `Upsert`, `Remove`, `RemovePath`, `ReplaceVolume`, `Relevance` (+56 more)
   These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 439 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
 - **23 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `JournalCheckpoint` connect `IndexIssue` to `search.rs`, `app.rs`, `engine.rs`, `collect_journal_updates`, `NtfsMultiVolumeSource<I, E, J>`, `SearchEntry`, `SearchIndex`, `NtfsMftSource`, `ntfs.rs`, `persistence.rs`, `crawler.rs`, `DirectorySource`, `poll_updates`, `FakeEnumerator`?**
-  _High betweenness centrality (0.059) - this node is a cross-community bridge._
-- **What connects `Relevance`, `Name`, `Path` to the rest of the system?**
+- **Why does `SearchEntry` connect `SearchEntry` to `search.rs`, `app.rs`, `collect_journal_updates`, `NtfsMultiVolumeSource<I, E, J>`, `SearchIndex`, `watcher.rs`, `ntfs_source`, `NtfsMftSource`, `ntfs.rs`, `journal_index`, `persistence.rs`, `IndexIssue`, `crawler.rs`, `DirectorySource`?**
+  _High betweenness centrality (0.058) - this node is a cross-community bridge._
+- **What connects `Upsert`, `Remove`, `RemovePath` to the rest of the system?**
   _61 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `search.rs` be split into smaller, more focused modules?**
   _Cohesion score 0.08974358974358974 - nodes in this community are weakly interconnected._
-- **Why does `SearchEntry` connect `SearchEntry` to `search.rs`, `app.rs`, `collect_journal_updates`, `NtfsMultiVolumeSource<I, E, J>`, `SearchIndex`, `watcher.rs`, `ntfs_source`, `NtfsMftSource`, `ntfs.rs`, `journal_index`, `persistence.rs`, `IndexIssue`, `crawler.rs`, `DirectorySource`?**
-  _High betweenness centrality (0.058) - this node is a cross-community bridge._
+- **Why does `JournalCheckpoint` connect `IndexIssue` to `search.rs`, `app.rs`, `engine.rs`, `collect_journal_updates`, `NtfsMultiVolumeSource<I, E, J>`, `SearchEntry`, `SearchIndex`, `NtfsMftSource`, `ntfs.rs`, `persistence.rs`, `crawler.rs`, `DirectorySource`, `poll_updates`, `FakeEnumerator`?**
+  _High betweenness centrality (0.049) - this node is a cross-community bridge._
 - **Should `SearchApp` be split into smaller, more focused modules?**
   _Cohesion score 0.1497326203208556 - nodes in this community are weakly interconnected._
-- **Why does `SearchApp` connect `SearchApp` to `app.rs`, `engine.rs`, `WorkerResponse`, `service.rs`, `SortColumn`, `poll_updates`?**
-  _High betweenness centrality (0.047) - this node is a cross-community bridge._
+- **Why does `IndexScope` connect `engine.rs` to `SearchApp`, `app.rs`, `WorkerResponse`, `main.rs`, `tui/app.rs`, `poll_updates`, `TuiApp`?**
+  _High betweenness centrality (0.040) - this node is a cross-community bridge._
 - **Should `app.rs` be split into smaller, more focused modules?**
   _Cohesion score 0.056910569105691054 - nodes in this community are weakly interconnected._

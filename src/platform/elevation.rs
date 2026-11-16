@@ -7,7 +7,7 @@ use std::{ffi::OsString, io};
 pub fn is_elevated() -> bool {
     use std::mem;
 
-    use windows::Win32::{
+    use ::windows::Win32::{
         Foundation::{CloseHandle, HANDLE},
         Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
         System::Threading::{GetCurrentProcess, OpenProcessToken},

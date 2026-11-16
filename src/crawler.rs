@@ -17,9 +17,13 @@ use crate::{
     watcher::DirectoryWatcher,
 };
 
+#[cfg(not(windows))]
 const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
+#[cfg(not(windows))]
 const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
+#[cfg(any(not(windows), test))]
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+#[cfg(not(windows))]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 /// Multi-threaded crawler that indexes directories across any platform.
@@ -445,7 +449,9 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{DirectorySource, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN};
+    use super::{DirectorySource, FILE_ATTRIBUTE_DIRECTORY};
+    #[cfg(not(windows))]
+    use super::FILE_ATTRIBUTE_HIDDEN;
     use crate::search::IndexSource;
 
     struct TemporaryDirectory {

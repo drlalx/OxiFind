@@ -641,7 +641,7 @@ impl SearchApp {
             });
             ui.menu_button("Theme", |ui| {
                 let mut theme = ui.options(|options| options.theme_preference);
-                theme.radio_buttons(ui);
+                theme.buttons(ui);
                 ui.ctx().set_theme(theme);
             });
             ui.separator();
@@ -754,7 +754,7 @@ impl SearchApp {
         ui.add_space(4.0);
         let response = ui.add(
             egui::TextEdit::singleline(&mut self.query)
-                .id(egui::Id::new(SEARCH_FIELD_ID))
+                .id(egui::Id::unique(SEARCH_FIELD_ID))
                 .hint_text("Search files   ^prefix   =exact   path:text   sort:name")
                 .font(egui::FontId::proportional(16.0))
                 .margin(egui::Margin::symmetric(8, 6))

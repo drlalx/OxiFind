@@ -1,9 +1,11 @@
 //! Cross-platform filesystem watcher using the `notify` crate for live index updates.
 
+#[cfg(target_os = "linux")]
+use std::{collections::VecDeque, io, path::Path};
 use std::{
-    collections::{HashSet, VecDeque},
-    fs, io,
-    path::{Path, PathBuf},
+    collections::HashSet,
+    fs,
+    path::PathBuf,
     sync::{
         Arc,
         mpsc::{Receiver, channel},
@@ -23,7 +25,9 @@ pub struct DirectoryWatcher {
     exclusions: Arc<Vec<PathBuf>>,
     excluded_names: Arc<Vec<String>>,
     watched_dirs: HashSet<PathBuf>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     max_watches: usize,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     watch_limit_reported: bool,
 }
 
@@ -52,6 +56,7 @@ fn read_system_max_user_watches() -> Option<usize> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn is_watch_limit_error(err: &notify::Error) -> bool {
     matches!(err.kind, notify::ErrorKind::MaxFilesWatch)
         || matches!(

@@ -1193,14 +1193,10 @@ fn is_volume_root(path: &Path) -> bool {
         let lossy = path.to_string_lossy();
         let stripped = lossy.strip_prefix(r"\\?\").unwrap_or(&lossy);
         let bytes = stripped.as_bytes();
-        if bytes.len() == 3
+        bytes.len() == 3
             && bytes[0].is_ascii_alphabetic()
             && bytes[1] == b':'
             && (bytes[2] == b'\\' || bytes[2] == b'/')
-        {
-            return true;
-        }
-        false
     }
 }
 

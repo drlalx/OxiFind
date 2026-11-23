@@ -319,28 +319,26 @@ fusectl /sys/fs/fuse/connections fusectl rw 0 0
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn linux_default_exclusions_include_runtime_and_cache_paths() {
         let exclusions = default_system_exclusions();
-        #[cfg(target_os = "linux")]
-        {
-            for expected in [
-                "/proc",
-                "/sys",
-                "/dev",
-                "/run",
-                "/tmp",
-                "/var/tmp",
-                "/snap",
-                "/var/cache",
-                "/var/lib/docker",
-                "/timeshift",
-            ] {
-                assert!(
-                    exclusions.contains(&PathBuf::from(expected)),
-                    "missing exclusion {expected}"
-                );
-            }
+        for expected in [
+            "/proc",
+            "/sys",
+            "/dev",
+            "/run",
+            "/tmp",
+            "/var/tmp",
+            "/snap",
+            "/var/cache",
+            "/var/lib/docker",
+            "/timeshift",
+        ] {
+            assert!(
+                exclusions.contains(&PathBuf::from(expected)),
+                "missing exclusion {expected}"
+            );
         }
     }
 }

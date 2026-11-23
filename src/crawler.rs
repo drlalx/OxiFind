@@ -430,18 +430,25 @@ pub(crate) fn should_skip_path(
         return true;
     }
 
-    let file_name = path.file_name().and_then(|n| n.to_str());
-    if file_name.is_some_and(|name| matches!(name, ".git" | "target")) {
+    let has_excluded_component = path.components().any(|component| {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        let Some(name) = name.to_str() else {
+            return false;
+        };
+        matches!(name, ".git" | "target")
+            || excluded_names
+                .iter()
+                .any(|pattern| !pattern.contains(['/', '\\']) && pattern == name)
+    });
+    if has_excluded_component {
         return true;
     }
 
-    excluded_names.iter().any(|pattern| {
-        if pattern.contains(['/', '\\']) {
-            path.ends_with(pattern)
-        } else {
-            file_name.is_some_and(|name| name == pattern)
-        }
-    })
+    excluded_names
+        .iter()
+        .any(|pattern| pattern.contains(['/', '\\']) && path.ends_with(pattern))
 }
 
 #[cfg(windows)]
@@ -711,5 +718,10 @@ mod tests {
         ] {
             assert!(!names.contains(&skipped), "expected {skipped} to be skipped");
         }
+        assert!(super::should_skip_path(
+            &root.join("node_modules").join("deep").join("ignored.js"),
+            &[],
+            &["node_modules".to_owned()],
+        ));
     }
 }

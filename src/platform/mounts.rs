@@ -286,6 +286,7 @@ fusectl /sys/fs/fuse/connections fusectl rw 0 0
     #[test]
     fn provides_valid_default_exclusions_and_roots() {
         let exclusions = default_system_exclusions();
+        assert!(!exclusions.is_empty());
         #[cfg(target_os = "linux")]
         {
             assert!(exclusions.contains(&PathBuf::from("/proc")));

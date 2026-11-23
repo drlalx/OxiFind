@@ -109,10 +109,9 @@ pub(crate) mod macos {
                     .arg(script)
                     .arg(path)
                     .status()
+                    && status.success()
                 {
-                    if status.success() {
-                        return Ok(());
-                    }
+                    return Ok(());
                 }
                 command.arg(path);
             }

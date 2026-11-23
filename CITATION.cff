@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "OxiFind"
+abstract: "High-performance, multiplatform file search engine written in Rust with an egui GUI, a Ratatui TUI, and a background indexing service."
+authors:
+  - family-names: "Drichel"
+    given-names: "Alexander"
+    alias: "drlalx"
+version: "0.1.0"
+date-released: 2026-11-23
+license: MIT
+repository-code: "https://github.com/drlalx/OxiFind"
+url: "https://github.com/drlalx/OxiFind"
+keywords:
+  - rust
+  - file-search
+  - desktop-search
+  - filesystem-indexer
+  - cross-platform
+  - egui
+  - ratatui

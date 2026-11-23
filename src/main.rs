@@ -32,7 +32,11 @@ fn main() {
                 }
             }
             oxifind::backend::ServiceAction::Install { delay_seconds } => {
-                match oxifind::platform::service::install_service(delay_seconds) {
+                let scope_root = match &config.scope {
+                    oxifind::engine::IndexScope::Root(root) => Some(root.as_path()),
+                    oxifind::engine::IndexScope::LocalDrives => None,
+                };
+                match oxifind::platform::service::install_service_for_scope(delay_seconds, scope_root) {
                     Ok(()) => println!("OxiFind background service successfully installed and enabled (startup delay: {delay_seconds}s)."),
                     Err(error) => {
                         eprintln!("Failed to install service: {error}");

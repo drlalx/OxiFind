@@ -209,15 +209,17 @@
     cross-platform for Windows, Linux, and macOS.
   - Harmonized volume root parsing (`volume_root_path`, `is_volume_root`) across
     platforms.
-    - The complete test suite (137 tests across 5 unit and integration test suites) now
-    passes with 0 failures on Linux, with 0 Clippy errors and 0 warnings under the strict
+    - The complete test suite (195 tests across 9 unit and integration test suites)
+    passes on Linux, with 0 Clippy errors and 0 warnings under the strict
     no-panic policy.
   - Multiplatform abstraction layer (`src/platform/`):
     - `desktop.rs`: `open_path` (Open & Reveal) via Windows Explorer (`explorer.exe /select,`), Linux FreeDesktop DBus (`org.freedesktop.FileManager1.ShowItems` with fallback to `xdg-open`), and macOS (`open` and `open -R`).
     - `elevation.rs`: `is_elevated` and `restart_elevated` via Windows UAC `TOKEN_ELEVATION`/`runas`, Linux `libc::geteuid() == 0`/`pkexec`, and macOS `osascript with administrator privileges`.
-    - `mounts.rs`: Mount detection via Linux `/proc/mounts`, macOS `/Volumes`, and system path exclusions (`/proc`, `/sys`, `/dev`, `/run`, `/tmp`, etc.).
-  - Native multi-threaded Unix and directory indexing (`src/crawler.rs`):
-    - Multi-threaded work-stealing crawler (`DirectorySource`) indexing local drives or targeted directories.
+    - `mounts.rs`: Mount detection via Linux `/proc/mounts`, macOS `/Volumes`, Linux `$HOME`-preferred `default_linux_roots_from_home` (falling back to `/`), and expanded system path exclusions (`/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var/cache`, `/var/lib/docker`, `/var/lib/containers`, `/timeshift`, `/lost+found`, etc.).
+  - Native multi-threaded Unix and directory indexing (`src/crawler.rs`, `src/watcher.rs`, `src/engine.rs`, `src/persistence.rs`, `src/platform/service.rs`):
+    - Multi-threaded work-stealing crawler (`DirectorySource`) indexing local drives or targeted directories with `with_excluded_patterns` honoring `AppSettings::excluded_patterns` (defaults: `target`, `.git`, `node_modules`, `.cache`, `.stversions`, `__pycache__`, `.venv`).
+    - Filtered Linux `DirectoryWatcher` using `RecursiveMode::NonRecursive` per allowed directory, dynamic registration/pruning of nested subdirectories, and `default_watch_budget` (50% of `/proc/sys/fs/inotify/max_user_watches`, default 32,768) stopping cleanly with a single `IndexIssue` on limit exhaustion instead of spamming watches or starving Syncthing/Tracker.
+    - Wired `load_runtime_settings()` and `build_directory_source()` into both worker (`src/app.rs`/`src/engine.rs`) and daemon (`run_service`), added `SnapshotSavePolicy` debouncing (`15s` quiet delay, `60s` min interval, `300s` max dirty age) and compile-time `CRC32_TABLE`, and added `install_service_for_scope` so `oxifind service install [ROOT]` pins the systemd `ExecStart` root.
     - Captures file attributes across platforms (Directory, ReparsePoint/Symlink, ReadOnly, Hidden dotfiles).
     - Immune to symlink recursion loops and gracefully captures `EACCES` permission denied errors as recoverable `IndexIssue`s.
     - Wired into `src/app.rs` for `IndexScope::LocalDrives` and `IndexScope::Root` across Windows, Linux, and macOS.

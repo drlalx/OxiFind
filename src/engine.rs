@@ -11,11 +11,88 @@ use std::{
 use crate::ntfs::{NtfsMftSource, NtfsMultiVolumeSource, local_fixed_volumes};
 use crate::{
     crawler::DirectorySource,
+    persistence::AppSettings,
     search::{IndexSource, JournalCheckpoint, SearchIndex, SearchResult, UpdateBatch},
 };
 
 pub const RESULT_LIMIT: usize = 200;
 pub const UPDATE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+pub const SNAPSHOT_QUIET_DELAY: Duration = Duration::from_secs(15);
+pub const SNAPSHOT_MIN_SAVE_INTERVAL: Duration = Duration::from_secs(60);
+pub const SNAPSHOT_MAX_DIRTY_AGE: Duration = Duration::from_secs(300);
+
+/// Throttles snapshot serialization so bursts of filesystem events do not trigger 1s disk rewrites.
+#[derive(Clone, Copy, Debug)]
+pub struct SnapshotSavePolicy {
+    dirty_since: Option<Instant>,
+    last_change: Option<Instant>,
+    last_saved: Instant,
+}
+
+impl SnapshotSavePolicy {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            dirty_since: None,
+            last_change: None,
+            last_saved: now,
+        }
+    }
+
+    pub fn mark_dirty(&mut self, now: Instant) {
+        if self.dirty_since.is_none() {
+            self.dirty_since = Some(now);
+        }
+        self.last_change = Some(now);
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty_since.is_some()
+    }
+
+    pub fn should_save(&self, now: Instant) -> bool {
+        let (Some(first_dirty), Some(last_change)) = (self.dirty_since, self.last_change) else {
+            return false;
+        };
+        if now.saturating_duration_since(first_dirty) >= SNAPSHOT_MAX_DIRTY_AGE {
+            return true;
+        }
+        now.saturating_duration_since(last_change) >= SNAPSHOT_QUIET_DELAY
+            && now.saturating_duration_since(self.last_saved) >= SNAPSHOT_MIN_SAVE_INTERVAL
+    }
+
+    pub fn mark_saved(&mut self, now: Instant) {
+        self.dirty_since = None;
+        self.last_change = None;
+        self.last_saved = now;
+    }
+}
+
+/// Loads persisted settings, falling back to defaults on read or parse errors.
+pub fn load_runtime_settings() -> AppSettings {
+    let path = crate::persistence::default_settings_path();
+    match crate::persistence::load_settings(&path) {
+        Ok(settings) => settings,
+        Err(err) => {
+            eprintln!(
+                "Warning: Failed to load settings from {}: {err}",
+                path.display()
+            );
+            AppSettings::default()
+        }
+    }
+}
+
+/// Constructs a `DirectorySource` from the requested scope and persisted settings.
+pub fn build_directory_source(scope: &IndexScope, settings: &AppSettings) -> DirectorySource {
+    let source = match scope {
+        IndexScope::LocalDrives if !settings.indexed_paths.is_empty() => {
+            DirectorySource::with_roots(settings.indexed_paths.clone())
+        }
+        IndexScope::LocalDrives => DirectorySource::local_drives(),
+        IndexScope::Root(root) => DirectorySource::new(root.clone()),
+    };
+    source.with_excluded_patterns(&settings.excluded_patterns)
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum SortColumn {
@@ -190,6 +267,7 @@ pub fn spawn_search_worker_with_snapshot<N: WorkerNotifier>(
     notifier: N,
     snapshot_path: Option<PathBuf>,
 ) {
+    let settings = load_runtime_settings();
     thread::spawn(move || match scope {
         #[cfg(windows)]
         IndexScope::LocalDrives => run_search_worker(
@@ -201,7 +279,7 @@ pub fn spawn_search_worker_with_snapshot<N: WorkerNotifier>(
         ),
         #[cfg(not(windows))]
         IndexScope::LocalDrives => run_search_worker(
-            DirectorySource::local_drives(),
+            build_directory_source(&IndexScope::LocalDrives, &settings),
             command_tx,
             command_rx,
             notifier,
@@ -216,7 +294,7 @@ pub fn spawn_search_worker_with_snapshot<N: WorkerNotifier>(
             snapshot_path,
         ),
         IndexScope::Root(root) => run_search_worker(
-            DirectorySource::new(root),
+            build_directory_source(&IndexScope::Root(root), &settings),
             command_tx,
             command_rx,
             notifier,
@@ -235,7 +313,9 @@ fn run_search_worker<S: IndexSource + Send + 'static, N: WorkerNotifier>(
     let indexing_started = Instant::now();
     let mut loaded_from_cache = false;
 
-    let mut index = if let Some(ref path) = snapshot_path {
+    let mut index = if let Some(ref path) = snapshot_path
+        && source.can_resume_from_snapshot()
+    {
         match crate::persistence::load_snapshot(path) {
             Ok(Some(persisted)) => {
                 loaded_from_cache = true;
@@ -281,6 +361,7 @@ fn run_search_worker<S: IndexSource + Send + 'static, N: WorkerNotifier>(
     spawn_update_poller(source, index.journal_checkpoints().to_vec(), command_tx);
 
     let mut latest = SearchRequest::default();
+    let mut save_policy = SnapshotSavePolicy::new(Instant::now());
     while let Ok(mut command) = command_rx.recv() {
         if let WorkerCommand::Search(_) = command {
             while let Ok(next) = command_rx.try_recv() {
@@ -289,16 +370,15 @@ fn run_search_worker<S: IndexSource + Send + 'static, N: WorkerNotifier>(
                         command = WorkerCommand::Search(newer_request);
                     }
                     other => {
+                        let was_update = matches!(command, WorkerCommand::ApplyUpdates(_));
                         if notifier
-                            .notify(handle_command(
-                                &mut index,
-                                &mut latest,
-                                command,
-                                snapshot_path.as_deref(),
-                            ))
+                            .notify(handle_command(&mut index, &mut latest, command))
                             .is_err()
                         {
                             return;
+                        }
+                        if was_update {
+                            save_policy.mark_dirty(Instant::now());
                         }
                         command = other;
                         break;
@@ -306,17 +386,31 @@ fn run_search_worker<S: IndexSource + Send + 'static, N: WorkerNotifier>(
                 }
             }
         }
+        let was_update = matches!(command, WorkerCommand::ApplyUpdates(_));
         if notifier
-            .notify(handle_command(
-                &mut index,
-                &mut latest,
-                command,
-                snapshot_path.as_deref(),
-            ))
+            .notify(handle_command(&mut index, &mut latest, command))
             .is_err()
         {
             return;
         }
+        let now = Instant::now();
+        if was_update {
+            save_policy.mark_dirty(now);
+        }
+        if let Some(ref path) = snapshot_path
+            && save_policy.should_save(now)
+            && crate::persistence::save_snapshot(path, index.journal_checkpoints(), index.entries())
+                .is_ok()
+        {
+            save_policy.mark_saved(now);
+        }
+    }
+
+    if let Some(ref path) = snapshot_path
+        && save_policy.is_dirty()
+    {
+        let _ =
+            crate::persistence::save_snapshot(path, index.journal_checkpoints(), index.entries());
     }
 }
 
@@ -324,7 +418,6 @@ fn handle_command(
     index: &mut SearchIndex,
     latest: &mut SearchRequest,
     command: WorkerCommand,
-    snapshot_path: Option<&Path>,
 ) -> WorkerResponse {
     match command {
         WorkerCommand::Search(request) => {
@@ -337,13 +430,6 @@ fn handle_command(
         }
         WorkerCommand::ApplyUpdates(batch) => {
             index.apply(batch);
-            if let Some(path) = snapshot_path {
-                let _ = crate::persistence::save_snapshot(
-                    path,
-                    index.journal_checkpoints(),
-                    index.entries(),
-                );
-            }
             WorkerResponse::IndexUpdated {
                 indexed_items: index.len(),
                 indexing_issues: index.indexing_issue_count(),
@@ -460,18 +546,26 @@ pub fn run_service(
         thread::sleep(Duration::from_secs(delay_seconds as u64));
     }
 
+    let settings = load_runtime_settings();
+
     // One source instance is used for the initial load, the watcher and polling: the watcher
     // state lives in the instance, so a second instance would never report any change.
     #[cfg(windows)]
     let source: Box<dyn IndexSource> = match &scope {
         IndexScope::LocalDrives => Box::new(NtfsMultiVolumeSource::new(local_fixed_volumes())),
         IndexScope::Root(root) if is_volume_root(root) => Box::new(NtfsMftSource::new(root.clone())),
-        IndexScope::Root(root) => Box::new(DirectorySource::new(root.clone())),
+        IndexScope::Root(_) => Box::new(build_directory_source(&scope, &settings)),
     };
     #[cfg(not(windows))]
-    let source: Box<dyn IndexSource> = match &scope {
-        IndexScope::LocalDrives => Box::new(DirectorySource::local_drives()),
-        IndexScope::Root(root) => Box::new(DirectorySource::new(root.clone())),
+    let source: Box<dyn IndexSource> = {
+        let dir_source = build_directory_source(&scope, &settings);
+        let root_list: Vec<String> = dir_source
+            .roots()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        println!("==> Configured roots: {}", root_list.join(", "));
+        Box::new(dir_source)
     };
 
     let snapshot_path = crate::persistence::default_snapshot_path();
@@ -499,10 +593,14 @@ pub fn run_service(
                     persisted.entries.len()
                 );
             }
-            println!("==> No existing snapshot found. Starting full filesystem crawl for scope '{scope}'...");
+            println!("==> Starting full filesystem crawl for scope '{scope}'...");
 
             let idx = SearchIndex::from_source(&source)?;
-            println!("==> Full scan complete: indexed {} items.", idx.len());
+            println!(
+                "==> Full scan complete: indexed {} items ({} issue(s)).",
+                idx.len(),
+                idx.indexing_issue_count()
+            );
             crate::persistence::save_snapshot(
                 &snapshot_path,
                 idx.journal_checkpoints(),
@@ -515,26 +613,29 @@ pub fn run_service(
     println!("==> Background service active: monitoring filesystem for changes...");
 
     let mut checkpoints = index.journal_checkpoints().to_vec();
+    let mut save_policy = SnapshotSavePolicy::new(Instant::now());
 
     loop {
         thread::sleep(UPDATE_POLL_INTERVAL);
         match poll_updates(&source, &mut checkpoints) {
             ControlFlow::Break(()) => {
+                if save_policy.is_dirty() {
+                    let _ = crate::persistence::save_snapshot(
+                        &snapshot_path,
+                        index.journal_checkpoints(),
+                        index.entries(),
+                    );
+                }
                 println!("==> Source update polling completed.");
                 break;
             }
             ControlFlow::Continue(Some(WorkerCommand::ApplyUpdates(batch))) => {
                 let batch_size = batch.updates.len();
                 index.apply(batch);
-                if let Err(e) = crate::persistence::save_snapshot(
-                    &snapshot_path,
-                    index.journal_checkpoints(),
-                    index.entries(),
-                ) {
-                    eprintln!("Warning: Failed to save updated snapshot: {e}");
-                } else {
+                if batch_size > 0 {
+                    save_policy.mark_dirty(Instant::now());
                     println!(
-                        "==> Applied {batch_size} change(s). Database updated: {} items.",
+                        "==> Applied {batch_size} change(s). In-memory index: {} items.",
                         index.len()
                     );
                 }
@@ -544,6 +645,23 @@ pub fn run_service(
             }
             ControlFlow::Continue(None) => {}
             ControlFlow::Continue(Some(WorkerCommand::Search(_))) => {}
+        }
+
+        let now = Instant::now();
+        if save_policy.should_save(now) {
+            match crate::persistence::save_snapshot(
+                &snapshot_path,
+                index.journal_checkpoints(),
+                index.entries(),
+            ) {
+                Ok(()) => {
+                    save_policy.mark_saved(now);
+                    println!("==> Persisted database snapshot ({} items).", index.len());
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to save updated snapshot: {e}");
+                }
+            }
         }
     }
 
@@ -620,5 +738,56 @@ mod tests {
             format!("{}", IndexScope::Root(PathBuf::from("/test/path"))),
             "/test/path"
         );
+    }
+
+    #[test]
+    fn snapshot_save_policy_throttles_bursts_and_flushes_after_quiet_or_max_age() {
+        let start = Instant::now();
+        let mut policy = SnapshotSavePolicy::new(start);
+        assert!(!policy.is_dirty());
+        assert!(!policy.should_save(start + Duration::from_secs(600)));
+
+        // Continuous burst updates within quiet window & min save interval stay deferred.
+        policy.mark_dirty(start + Duration::from_secs(1));
+        assert!(policy.is_dirty());
+        assert!(!policy.should_save(start + Duration::from_secs(5)));
+        assert!(!policy.should_save(start + Duration::from_secs(20))); // < min save interval (60s)
+
+        // After quiet delay AND min save interval, save is allowed.
+        assert!(policy.should_save(start + Duration::from_secs(65)));
+        policy.mark_saved(start + Duration::from_secs(65));
+        assert!(!policy.is_dirty());
+
+        // Continuous updates with no quiet gap still flush once max dirty age (300s) is reached.
+        let t1 = start + Duration::from_secs(70);
+        policy.mark_dirty(t1);
+        for step in (75..=365).step_by(10) {
+            let now = start + Duration::from_secs(step);
+            policy.mark_dirty(now);
+            assert!(!policy.should_save(now), "saved too early at +{step}s");
+        }
+        assert!(policy.should_save(start + Duration::from_secs(370)));
+    }
+
+    #[test]
+    fn build_directory_source_applies_settings_paths_and_exclusions() {
+        let settings = crate::persistence::AppSettings {
+            indexed_paths: vec![PathBuf::from("/tmp/oxifind-a"), PathBuf::from("/tmp/oxifind-b")],
+            excluded_patterns: vec!["node_modules".to_owned(), "*/.cache/*".to_owned()],
+            ..crate::persistence::AppSettings::default()
+        };
+
+        let local_source = build_directory_source(&IndexScope::LocalDrives, &settings);
+        assert_eq!(
+            local_source.roots(),
+            &[PathBuf::from("/tmp/oxifind-a"), PathBuf::from("/tmp/oxifind-b")]
+        );
+        assert!(local_source.excluded_names().contains(&"node_modules".to_owned()));
+        assert!(local_source.excluded_names().contains(&".cache".to_owned()));
+
+        let root_source =
+            build_directory_source(&IndexScope::Root(PathBuf::from("/tmp/explicit")), &settings);
+        assert_eq!(root_source.roots(), &[PathBuf::from("/tmp/explicit")]);
+        assert!(root_source.excluded_names().contains(&".cache".to_owned()));
     }
 }

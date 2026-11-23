@@ -107,11 +107,15 @@ OxiFind caches index snapshots and configuration in platform-specific applicatio
 * **Atomicity:** Written to a temporary file (`.tmp.<pid>.<timestamp>`) and swapped atomically using OS rename semantics.
 
 ### Settings Configuration (`settings.json`)
+`indexed_paths` overrides the default roots for `LocalDrives` mode (on Linux `$HOME` by default); `excluded_patterns` skips matching directory names/globs in both the crawler and the Linux `DirectoryWatcher` (which caps watched directories at 50% of `/proc/sys/fs/inotify/max_user_watches`):
 ```json
 {
-  "indexed_paths": ["C:\\", "D:\\Data"],
-  "excluded_patterns": ["*/.git/*", "*/target/*", "*/node_modules/*"],
-  "max_results": 1000
+  "indexed_paths": ["/home/user/Documents", "/home/user/Sync"],
+  "excluded_patterns": ["target", ".git", "node_modules", ".cache", ".stversions", "__pycache__", ".venv"],
+  "max_results": 1000,
+  "match_case": false,
+  "match_path": false,
+  "match_regex": false
 }
 ```
 
@@ -208,8 +212,9 @@ OxiFind can operate as an autonomous background daemon/service (similar to Synct
 
 ### Management via CLI
 ```bash
-# Install and enable background service (systemd --user on Linux)
+# Install and enable background service (systemd --user on Linux, optionally pinned to a root path)
 oxifind service install --delay 15
+oxifind service install /home/user/Sync --delay 15
 
 # Query service status
 oxifind service status

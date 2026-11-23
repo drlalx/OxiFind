@@ -12,6 +12,7 @@ use std::{
 };
 
 use crate::{
+    persistence::AppSettings,
     platform::mounts::{default_local_roots, default_system_exclusions, is_path_excluded},
     search::{EntryMetadata, IndexIssue, IndexSource, IndexUpdate, JournalCheckpoint, SearchEntry},
     watcher::DirectoryWatcher,
@@ -32,6 +33,7 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 pub struct DirectorySource {
     roots: Vec<PathBuf>,
     exclusions: Vec<PathBuf>,
+    excluded_names: Vec<String>,
     num_threads: usize,
     watcher: Arc<Mutex<Option<DirectoryWatcher>>>,
 }
@@ -39,20 +41,15 @@ pub struct DirectorySource {
 impl DirectorySource {
     /// Creates a directory source for a single root path with default exclusions.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self {
-            roots: vec![root.into()],
-            exclusions: default_system_exclusions(),
-            num_threads: default_thread_count(),
-            watcher: Arc::new(Mutex::new(None)),
-        }
+        Self::with_roots(vec![root.into()])
     }
 
     /// Creates a directory source for multiple roots with default exclusions.
-    #[allow(dead_code)]
     pub fn with_roots(roots: Vec<PathBuf>) -> Self {
         Self {
             roots,
             exclusions: default_system_exclusions(),
+            excluded_names: normalize_excluded_patterns(&AppSettings::default().excluded_patterns),
             num_threads: default_thread_count(),
             watcher: Arc::new(Mutex::new(None)),
         }
@@ -60,12 +57,7 @@ impl DirectorySource {
 
     /// Creates a directory source configured to index the host's local drives or root filesystem.
     pub fn local_drives() -> Self {
-        Self {
-            roots: default_local_roots(),
-            exclusions: default_system_exclusions(),
-            num_threads: default_thread_count(),
-            watcher: Arc::new(Mutex::new(None)),
-        }
+        Self::with_roots(default_local_roots())
     }
 
     /// Replaces the exclusion paths.
@@ -73,6 +65,22 @@ impl DirectorySource {
     pub fn with_exclusions(mut self, exclusions: Vec<PathBuf>) -> Self {
         self.exclusions = exclusions;
         self
+    }
+
+    /// Sets directory/pattern exclusions (always keeping `.git` and `target` excluded).
+    pub fn with_excluded_patterns(mut self, patterns: &[String]) -> Self {
+        self.excluded_names = normalize_excluded_patterns(patterns);
+        self
+    }
+
+    /// Returns the configured index roots.
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.roots
+    }
+
+    /// Returns the normalized excluded directory/path patterns.
+    pub fn excluded_names(&self) -> &[String] {
+        &self.excluded_names
     }
 
     /// Sets the worker thread count.
@@ -125,13 +133,15 @@ impl DirectorySource {
 
         let work_queue = Arc::new(WorkQueue::new(initial_dirs));
         let exclusions = Arc::new(effective_exclusions);
+        let excluded_names = Arc::new(self.excluded_names.clone());
         let mut handles = Vec::with_capacity(self.num_threads);
 
         for _ in 0..self.num_threads {
             let queue = Arc::clone(&work_queue);
             let excl = Arc::clone(&exclusions);
+            let names = Arc::clone(&excluded_names);
 
-            let handle = thread::spawn(move || worker_loop(queue, excl));
+            let handle = thread::spawn(move || worker_loop(queue, excl, names));
             handles.push(handle);
         }
 
@@ -156,7 +166,11 @@ impl DirectorySource {
 
 impl IndexSource for DirectorySource {
     fn start_watching(&self) -> Vec<IndexIssue> {
-        let (dir_watcher, watch_issues) = DirectoryWatcher::new(&self.roots, &self.exclusions);
+        let (dir_watcher, watch_issues) = DirectoryWatcher::with_exclusions_and_patterns(
+            &self.roots,
+            &self.exclusions,
+            &self.excluded_names,
+        );
         let mut guard = match self.watcher.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
@@ -195,11 +209,11 @@ impl IndexSource for DirectorySource {
         out: &mut Vec<IndexUpdate>,
         issues: &mut Vec<IndexIssue>,
     ) -> io::Result<()> {
-        let guard = match self.watcher.lock() {
+        let mut guard = match self.watcher.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        if let Some(ref w) = *guard {
+        if let Some(ref mut w) = *guard {
             w.drain_updates(out, issues);
             if let Some(checkpoint) = checkpoints.first_mut() {
                 checkpoint.next_usn = checkpoint.next_usn.saturating_add(out.len() as i64);
@@ -301,7 +315,11 @@ impl WorkQueue {
     }
 }
 
-fn worker_loop(queue: Arc<WorkQueue>, exclusions: Arc<Vec<PathBuf>>) -> WorkerResult {
+fn worker_loop(
+    queue: Arc<WorkQueue>,
+    exclusions: Arc<Vec<PathBuf>>,
+    excluded_names: Arc<Vec<String>>,
+) -> WorkerResult {
     let mut entries = Vec::new();
     let mut issues = Vec::new();
 
@@ -323,7 +341,7 @@ fn worker_loop(queue: Arc<WorkQueue>, exclusions: Arc<Vec<PathBuf>>) -> WorkerRe
                     };
 
                     let path = entry.path();
-                    if should_skip_path(&path, &exclusions) {
+                    if should_skip_path(&path, &exclusions, &excluded_names) {
                         continue;
                     }
 
@@ -383,16 +401,47 @@ fn worker_loop(queue: Arc<WorkQueue>, exclusions: Arc<Vec<PathBuf>>) -> WorkerRe
     WorkerResult { entries, issues }
 }
 
-pub(crate) fn should_skip_path(path: &Path, exclusions: &[PathBuf]) -> bool {
+pub(crate) fn normalize_excluded_patterns(patterns: &[String]) -> Vec<String> {
+    let mut normalized = Vec::with_capacity(patterns.len() + 2);
+    for default in [".git", "target"] {
+        normalized.push(default.to_owned());
+    }
+    for pattern in patterns {
+        let mut trimmed = pattern.trim();
+        while let Some(rest) = trimmed.strip_prefix("*/").or_else(|| trimmed.strip_prefix('/')) {
+            trimmed = rest;
+        }
+        while let Some(rest) = trimmed.strip_suffix("/*").or_else(|| trimmed.strip_suffix('/')) {
+            trimmed = rest;
+        }
+        if !trimmed.is_empty() && !normalized.iter().any(|existing| existing == trimmed) {
+            normalized.push(trimmed.to_owned());
+        }
+    }
+    normalized
+}
+
+pub(crate) fn should_skip_path(
+    path: &Path,
+    exclusions: &[PathBuf],
+    excluded_names: &[String],
+) -> bool {
     if is_path_excluded(path, exclusions) {
         return true;
     }
 
-    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-        matches!(file_name, ".git" | "target")
-    } else {
-        false
+    let file_name = path.file_name().and_then(|n| n.to_str());
+    if file_name.is_some_and(|name| matches!(name, ".git" | "target")) {
+        return true;
     }
+
+    excluded_names.iter().any(|pattern| {
+        if pattern.contains(['/', '\\']) {
+            path.ends_with(pattern)
+        } else {
+            file_name.is_some_and(|name| name == pattern)
+        }
+    })
 }
 
 #[cfg(windows)]
@@ -622,5 +671,45 @@ mod tests {
         }
 
         assert!(!updates.is_empty(), "expected the new file to be reported");
+    }
+
+    #[test]
+    fn skips_default_and_glob_excluded_patterns() {
+        let temp = TemporaryDirectory::new();
+        let root = temp.path();
+
+        for dir in ["node_modules", ".cache", ".stversions", "dist", "keep"] {
+            let dir_path = root.join(dir);
+            fs::create_dir_all(&dir_path).unwrap();
+            fs::write(dir_path.join(format!("{dir}_file.txt")), "x").unwrap();
+        }
+
+        let source = DirectorySource::new(root)
+            .with_excluded_patterns(&[
+                "node_modules".to_owned(),
+                ".cache".to_owned(),
+                ".stversions".to_owned(),
+                "*/dist/*".to_owned(),
+            ]);
+
+        let mut entries = Vec::new();
+        let mut issues = Vec::new();
+        source.collect_initial(&mut entries, &mut issues).unwrap();
+
+        let names: Vec<&str> = entries.iter().map(|e| e.metadata.name.as_str()).collect();
+        assert!(names.contains(&"keep"));
+        assert!(names.contains(&"keep_file.txt"));
+        for skipped in [
+            "node_modules",
+            "node_modules_file.txt",
+            ".cache",
+            ".cache_file.txt",
+            ".stversions",
+            ".stversions_file.txt",
+            "dist",
+            "dist_file.txt",
+        ] {
+            assert!(!names.contains(&skipped), "expected {skipped} to be skipped");
+        }
     }
 }

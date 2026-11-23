@@ -15,7 +15,7 @@ use egui_extras::{Column, TableBuilder};
 #[cfg(windows)]
 use crate::ntfs::{NtfsMftSource, NtfsMultiVolumeSource, local_fixed_volumes};
 use crate::{
-    crawler::DirectorySource,
+    engine::{build_directory_source, load_runtime_settings},
     platform::{self, OpenAction, open_path},
     search::{IndexSource, JournalCheckpoint, SearchIndex, SearchResult, UpdateBatch},
 };
@@ -987,6 +987,7 @@ fn spawn_search_worker(
     command_rx: mpsc::Receiver<WorkerCommand>,
     response_tx: ResponseSender,
 ) {
+    let settings = load_runtime_settings();
     thread::spawn(move || match scope {
         #[cfg(windows)]
         IndexScope::LocalDrives => run_search_worker(
@@ -997,7 +998,7 @@ fn spawn_search_worker(
         ),
         #[cfg(not(windows))]
         IndexScope::LocalDrives => run_search_worker(
-            DirectorySource::local_drives(),
+            build_directory_source(&IndexScope::LocalDrives, &settings),
             command_tx,
             command_rx,
             response_tx,
@@ -1010,7 +1011,7 @@ fn spawn_search_worker(
             response_tx,
         ),
         IndexScope::Root(root) => run_search_worker(
-            DirectorySource::new(root),
+            build_directory_source(&IndexScope::Root(root), &settings),
             command_tx,
             command_rx,
             response_tx,

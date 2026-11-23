@@ -1,6 +1,6 @@
 //! Background service and daemon management across Linux (systemd), Windows (Task Scheduler), and macOS (launchd).
 
-use std::io;
+use std::{io, path::Path};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceStatus {
@@ -37,17 +37,22 @@ pub fn service_status() -> ServiceStatus {
 
 /// Installs the background indexer service with a startup delay in seconds.
 pub fn install_service(delay_seconds: u32) -> io::Result<()> {
+    install_service_for_scope(delay_seconds, None)
+}
+
+/// Installs the background indexer service with an optional explicit root scope.
+pub fn install_service_for_scope(delay_seconds: u32, root: Option<&Path>) -> io::Result<()> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        linux::install_service(delay_seconds)
+        linux::install_service(delay_seconds, root)
     }
     #[cfg(windows)]
     {
-        windows::install_service(delay_seconds)
+        windows::install_service(delay_seconds, root)
     }
     #[cfg(target_os = "macos")]
     {
-        macos::install_service(delay_seconds)
+        macos::install_service(delay_seconds, root)
     }
 }
 
@@ -99,10 +104,34 @@ pub fn stop_service() -> io::Result<()> {
     }
 }
 
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+fn format_systemd_arg(arg: &str) -> String {
+    if arg.contains([' ', '\t', '"', '\\']) {
+        let escaped = arg.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{escaped}\"")
+    } else {
+        arg.to_owned()
+    }
+}
+
 /// Builds the systemd user unit. The delay is passed once via `--delay`, so the service's own
 /// startup delay is the only one applied (an `ExecStartPre` sleep would add a second delay).
 #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 pub fn systemd_unit_content(exe_path: &str, delay_seconds: u32) -> String {
+    systemd_unit_content_with_root(exe_path, delay_seconds, None)
+}
+
+/// Builds the systemd user unit with an optional explicit `INDEX_ROOT` argument.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+pub fn systemd_unit_content_with_root(
+    exe_path: &str,
+    delay_seconds: u32,
+    root: Option<&Path>,
+) -> String {
+    let exe_arg = format_systemd_arg(exe_path);
+    let root_suffix = root.map_or_else(String::new, |path| {
+        format!(" {}", format_systemd_arg(&path.display().to_string()))
+    });
     format!(
         r#"[Unit]
 Description=OxiFind Background Search Indexer
@@ -111,7 +140,7 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart={exe_path} --service --delay {delay_seconds}
+ExecStart={exe_arg} --service --delay {delay_seconds}{root_suffix}
 Restart=on-failure
 RestartSec=10
 Nice=19
@@ -133,10 +162,10 @@ pub fn schtasks_delay_value(delay_seconds: u32) -> String {
 pub mod linux {
     use std::{
         fs, io,
-        path::PathBuf,
+        path::{Path, PathBuf},
         process::Command,
     };
-    use super::{ServiceStatus, systemd_unit_content};
+    use super::{ServiceStatus, systemd_unit_content_with_root};
 
     pub fn user_unit_dir() -> io::Result<PathBuf> {
         if let Some(config_dir) = std::env::var_os("XDG_CONFIG_HOME") {
@@ -177,7 +206,7 @@ pub mod linux {
         }
     }
 
-    pub fn install_service(delay_seconds: u32) -> io::Result<()> {
+    pub fn install_service(delay_seconds: u32, root: Option<&Path>) -> io::Result<()> {
         let unit_dir = user_unit_dir()?;
         fs::create_dir_all(&unit_dir)?;
         let unit_path = unit_dir.join("oxifind.service");
@@ -186,7 +215,10 @@ pub mod linux {
             .unwrap_or_else(|_| PathBuf::from("oxifind"));
         let exe_str = exe_path.display().to_string();
 
-        fs::write(&unit_path, systemd_unit_content(&exe_str, delay_seconds))?;
+        fs::write(
+            &unit_path,
+            systemd_unit_content_with_root(&exe_str, delay_seconds, root),
+        )?;
 
         // Reload systemd & enable service
         let _ = Command::new("systemctl")
@@ -258,7 +290,7 @@ pub mod linux {
 
 #[cfg(windows)]
 pub mod windows {
-    use std::{io, process::Command};
+    use std::{io, path::Path, process::Command};
     use super::{ServiceStatus, schtasks_delay_value};
 
     pub fn service_status() -> ServiceStatus {
@@ -279,9 +311,12 @@ pub mod windows {
         }
     }
 
-    pub fn install_service(delay_seconds: u32) -> io::Result<()> {
+    pub fn install_service(delay_seconds: u32, root: Option<&Path>) -> io::Result<()> {
         let exe_path = std::env::current_exe()?;
-        let exe_str = format!("\"{}\" --service", exe_path.display());
+        let exe_str = match root {
+            Some(path) => format!("\"{}\" --service \"{}\"", exe_path.display(), path.display()),
+            None => format!("\"{}\" --service", exe_path.display()),
+        };
 
         let delay_str = schtasks_delay_value(delay_seconds);
 
@@ -356,7 +391,7 @@ pub mod windows {
 pub mod macos {
     use std::{
         fs, io,
-        path::PathBuf,
+        path::{Path, PathBuf},
         process::Command,
     };
     use super::ServiceStatus;
@@ -385,12 +420,15 @@ pub mod macos {
         }
     }
 
-    pub fn install_service(delay_seconds: u32) -> io::Result<()> {
+    pub fn install_service(delay_seconds: u32, root: Option<&Path>) -> io::Result<()> {
         let path = plist_path()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         let exe_path = std::env::current_exe()?;
+        let root_arg = root.map_or_else(String::new, |p| {
+            format!("\n        <string>{}</string>", p.display())
+        });
 
         let plist_content = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -404,7 +442,7 @@ pub mod macos {
         <string>{}</string>
         <string>--service</string>
         <string>--delay</string>
-        <string>{}</string>
+        <string>{}</string>{}
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -418,7 +456,8 @@ pub mod macos {
 </plist>
 "#,
             exe_path.display(),
-            delay_seconds
+            delay_seconds,
+            root_arg
         );
 
         fs::write(&path, plist_content)?;
@@ -502,5 +541,26 @@ mod tests {
         let unit = systemd_unit_content("/usr/bin/oxifind", 60);
         assert!(unit.contains("ExecStart=/usr/bin/oxifind --service --delay 60\n"));
         assert!(!unit.contains("ExecStartPre"));
+    }
+
+    #[test]
+    fn systemd_unit_with_root_appends_and_quotes_scope_root() {
+        use std::path::Path;
+
+        let unit = super::systemd_unit_content_with_root(
+            "/usr/bin/oxifind",
+            15,
+            Some(Path::new("/home/user/My Docs")),
+        );
+        assert!(unit.contains(
+            "ExecStart=/usr/bin/oxifind --service --delay 15 \"/home/user/My Docs\"\n"
+        ));
+
+        let plain = super::systemd_unit_content_with_root(
+            "/usr/bin/oxifind",
+            15,
+            Some(Path::new("/home/user/Sync")),
+        );
+        assert!(plain.contains("ExecStart=/usr/bin/oxifind --service --delay 15 /home/user/Sync\n"));
     }
 }

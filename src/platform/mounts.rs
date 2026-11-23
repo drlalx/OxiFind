@@ -143,7 +143,12 @@ pub fn default_system_exclusions() -> Vec<PathBuf> {
             PathBuf::from("/run"),
             PathBuf::from("/tmp"),
             PathBuf::from("/var/tmp"),
+            PathBuf::from("/var/cache"),
+            PathBuf::from("/var/lib/docker"),
+            PathBuf::from("/var/lib/containers"),
             PathBuf::from("/snap"),
+            PathBuf::from("/timeshift"),
+            PathBuf::from("/lost+found"),
         ]
     }
     #[cfg(target_os = "macos")]
@@ -170,6 +175,18 @@ pub fn default_system_exclusions() -> Vec<PathBuf> {
     }
 }
 
+/// Resolves the Linux default crawl root from `$HOME`, falling back to `/` if unset or missing.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn default_linux_roots_from_home(home: Option<&Path>) -> Vec<PathBuf> {
+    if let Some(home_dir) = home
+        && !home_dir.as_os_str().is_empty()
+        && home_dir.is_dir()
+    {
+        return vec![home_dir.to_path_buf()];
+    }
+    vec![PathBuf::from("/")]
+}
+
 /// Returns the default root paths to index when no specific path is given.
 pub fn default_local_roots() -> Vec<PathBuf> {
     #[cfg(windows)]
@@ -178,7 +195,8 @@ pub fn default_local_roots() -> Vec<PathBuf> {
     }
     #[cfg(target_os = "linux")]
     {
-        vec![PathBuf::from("/")]
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        default_linux_roots_from_home(home.as_deref())
     }
     #[cfg(target_os = "macos")]
     {
@@ -280,5 +298,49 @@ fusectl /sys/fs/fuse/connections fusectl rw 0 0
 
         let roots = default_local_roots();
         assert!(!roots.is_empty());
+    }
+
+    #[test]
+    fn default_linux_roots_prefers_existing_home_and_falls_back_to_root() {
+        let missing = PathBuf::from("/nonexistent/oxifind-home-xyz");
+        assert_eq!(
+            super::default_linux_roots_from_home(Some(&missing)),
+            vec![PathBuf::from("/")]
+        );
+        assert_eq!(
+            super::default_linux_roots_from_home(None),
+            vec![PathBuf::from("/")]
+        );
+
+        let existing = std::env::temp_dir();
+        assert_eq!(
+            super::default_linux_roots_from_home(Some(&existing)),
+            vec![existing]
+        );
+    }
+
+    #[test]
+    fn linux_default_exclusions_include_runtime_and_cache_paths() {
+        let exclusions = default_system_exclusions();
+        #[cfg(target_os = "linux")]
+        {
+            for expected in [
+                "/proc",
+                "/sys",
+                "/dev",
+                "/run",
+                "/tmp",
+                "/var/tmp",
+                "/snap",
+                "/var/cache",
+                "/var/lib/docker",
+                "/timeshift",
+            ] {
+                assert!(
+                    exclusions.contains(&PathBuf::from(expected)),
+                    "missing exclusion {expected}"
+                );
+            }
+        }
     }
 }

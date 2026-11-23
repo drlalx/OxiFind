@@ -36,6 +36,10 @@ impl Default for AppSettings {
                 "target".to_owned(),
                 ".git".to_owned(),
                 "node_modules".to_owned(),
+                ".cache".to_owned(),
+                ".stversions".to_owned(),
+                "__pycache__".to_owned(),
+                ".venv".to_owned(),
             ],
             max_results: 1000,
             match_case: false,
@@ -93,15 +97,29 @@ impl From<io::Error> for PersistenceError {
     }
 }
 
+const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut crc = i as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            let mask = (crc & 1).wrapping_neg() & 0xEDB8_8320;
+            crc = (crc >> 1) ^ mask;
+            bit += 1;
+        }
+        table[i] = crc;
+        i += 1;
+    }
+    table
+};
+
 /// Computes the standard IEEE 802.3 CRC32 checksum over the provided data.
 pub fn compute_crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFF_u32;
     for &byte in data {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg() & 0xEDB8_8320;
-            crc = (crc >> 1) ^ mask;
-        }
+        let idx = ((crc ^ byte as u32) & 0xFF) as usize;
+        crc = (crc >> 8) ^ CRC32_TABLE[idx];
     }
     !crc
 }
@@ -323,5 +341,25 @@ mod tests {
     fn test_crc32_standard_vector() {
         // Standard check value for "123456789"
         assert_eq!(compute_crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(compute_crc32(b""), 0x0000_0000);
+    }
+
+    #[test]
+    fn default_settings_include_common_cache_and_sync_exclusions() {
+        let defaults = AppSettings::default();
+        for pattern in [
+            "target",
+            ".git",
+            "node_modules",
+            ".cache",
+            ".stversions",
+            "__pycache__",
+            ".venv",
+        ] {
+            assert!(
+                defaults.excluded_patterns.iter().any(|p| p == pattern),
+                "missing default excluded pattern: {pattern}"
+            );
+        }
     }
 }

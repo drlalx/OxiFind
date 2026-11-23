@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Build & Test (${{ matrix.os }})
@@ -17,6 +20,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Linux GUI dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libxkbcommon-dev
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -61,11 +78,12 @@ jobs:
       - name: Package macOS Artifacts
         if: matrix.os == 'macos-latest'
         run: |
+          ARCH="$(uname -m)"
           mkdir -p dist/macos
           cp target/release/oxifind dist/macos/
           cp packaging/macos/Info.plist dist/macos/
           cp README.md LICENSE dist/macos/
-          tar -czf dist/oxifind-macos-x86_64.tar.gz -C dist/macos .
+          tar -czf "dist/oxifind-macos-${ARCH}.tar.gz" -C dist/macos .
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4

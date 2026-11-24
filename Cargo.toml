@@ -2,6 +2,7 @@
 name = "oxifind"
 version = "0.1.0"
 edition = "2024"
+description = "Fast cross-platform file search engine in Rust with egui GUI, Ratatui TUI, and background indexing daemon."
 
 license = "MIT"
 

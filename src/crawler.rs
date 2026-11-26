@@ -101,14 +101,13 @@ impl DirectorySource {
         }
 
         // Validate single root existence early
-        if self.roots.len() == 1 {
-            let root = &self.roots[0];
-            if !root.exists() {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Path does not exist: {}", root.display()),
-                ));
-            }
+        if let [root] = self.roots.as_slice()
+            && !root.exists()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Path does not exist: {}", root.display()),
+            ));
         }
 
         // Filter out exclusions that are ancestors of any requested root so that
@@ -408,10 +407,16 @@ pub(crate) fn normalize_excluded_patterns(patterns: &[String]) -> Vec<String> {
     }
     for pattern in patterns {
         let mut trimmed = pattern.trim();
-        while let Some(rest) = trimmed.strip_prefix("*/").or_else(|| trimmed.strip_prefix('/')) {
+        while let Some(rest) = trimmed
+            .strip_prefix("*/")
+            .or_else(|| trimmed.strip_prefix('/'))
+        {
             trimmed = rest;
         }
-        while let Some(rest) = trimmed.strip_suffix("/*").or_else(|| trimmed.strip_suffix('/')) {
+        while let Some(rest) = trimmed
+            .strip_suffix("/*")
+            .or_else(|| trimmed.strip_suffix('/'))
+        {
             trimmed = rest;
         }
         if !trimmed.is_empty() && !normalized.iter().any(|existing| existing == trimmed) {
@@ -691,13 +696,12 @@ mod tests {
             fs::write(dir_path.join(format!("{dir}_file.txt")), "x").unwrap();
         }
 
-        let source = DirectorySource::new(root)
-            .with_excluded_patterns(&[
-                "node_modules".to_owned(),
-                ".cache".to_owned(),
-                ".stversions".to_owned(),
-                "*/dist/*".to_owned(),
-            ]);
+        let source = DirectorySource::new(root).with_excluded_patterns(&[
+            "node_modules".to_owned(),
+            ".cache".to_owned(),
+            ".stversions".to_owned(),
+            "*/dist/*".to_owned(),
+        ]);
 
         let mut entries = Vec::new();
         let mut issues = Vec::new();
@@ -716,7 +720,10 @@ mod tests {
             "dist",
             "dist_file.txt",
         ] {
-            assert!(!names.contains(&skipped), "expected {skipped} to be skipped");
+            assert!(
+                !names.contains(&skipped),
+                "expected {skipped} to be skipped"
+            );
         }
         assert!(super::should_skip_path(
             &root.join("node_modules").join("deep").join("ignored.js"),

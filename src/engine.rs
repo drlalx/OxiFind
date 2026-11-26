@@ -542,7 +542,9 @@ pub fn run_service(
     println!("==> OxiFind Background Service initializing...");
 
     if delay_seconds > 0 {
-        println!("==> Startup delay: waiting {delay_seconds} seconds before indexing / monitoring...");
+        println!(
+            "==> Startup delay: waiting {delay_seconds} seconds before indexing / monitoring..."
+        );
         thread::sleep(Duration::from_secs(delay_seconds as u64));
     }
 
@@ -553,7 +555,9 @@ pub fn run_service(
     #[cfg(windows)]
     let source: Box<dyn IndexSource> = match &scope {
         IndexScope::LocalDrives => Box::new(NtfsMultiVolumeSource::new(local_fixed_volumes())),
-        IndexScope::Root(root) if is_volume_root(root) => Box::new(NtfsMftSource::new(root.clone())),
+        IndexScope::Root(root) if is_volume_root(root) => {
+            Box::new(NtfsMftSource::new(root.clone()))
+        }
         IndexScope::Root(_) => Box::new(build_directory_source(&scope, &settings)),
     };
     #[cfg(not(windows))]
@@ -732,7 +736,10 @@ mod tests {
         #[cfg(windows)]
         assert_eq!(format!("{}", IndexScope::LocalDrives), "all local drives");
         #[cfg(not(windows))]
-        assert_eq!(format!("{}", IndexScope::LocalDrives), "all local filesystems");
+        assert_eq!(
+            format!("{}", IndexScope::LocalDrives),
+            "all local filesystems"
+        );
 
         assert_eq!(
             format!("{}", IndexScope::Root(PathBuf::from("/test/path"))),
@@ -772,7 +779,10 @@ mod tests {
     #[test]
     fn build_directory_source_applies_settings_paths_and_exclusions() {
         let settings = crate::persistence::AppSettings {
-            indexed_paths: vec![PathBuf::from("/tmp/oxifind-a"), PathBuf::from("/tmp/oxifind-b")],
+            indexed_paths: vec![
+                PathBuf::from("/tmp/oxifind-a"),
+                PathBuf::from("/tmp/oxifind-b"),
+            ],
             excluded_patterns: vec!["node_modules".to_owned(), "*/.cache/*".to_owned()],
             ..crate::persistence::AppSettings::default()
         };
@@ -780,9 +790,16 @@ mod tests {
         let local_source = build_directory_source(&IndexScope::LocalDrives, &settings);
         assert_eq!(
             local_source.roots(),
-            &[PathBuf::from("/tmp/oxifind-a"), PathBuf::from("/tmp/oxifind-b")]
+            &[
+                PathBuf::from("/tmp/oxifind-a"),
+                PathBuf::from("/tmp/oxifind-b")
+            ]
         );
-        assert!(local_source.excluded_names().contains(&"node_modules".to_owned()));
+        assert!(
+            local_source
+                .excluded_names()
+                .contains(&"node_modules".to_owned())
+        );
         assert!(local_source.excluded_names().contains(&".cache".to_owned()));
 
         let root_source =

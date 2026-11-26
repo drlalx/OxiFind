@@ -97,6 +97,7 @@ impl From<io::Error> for PersistenceError {
     }
 }
 
+#[allow(clippy::indexing_slicing)] // Compile-time bounded loop: i < 256 over [u32; 256].
 const CRC32_TABLE: [u32; 256] = {
     let mut table = [0u32; 256];
     let mut i = 0usize;
@@ -119,7 +120,7 @@ pub fn compute_crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFF_u32;
     for &byte in data {
         let idx = ((crc ^ byte as u32) & 0xFF) as usize;
-        crc = (crc >> 8) ^ CRC32_TABLE[idx];
+        crc = (crc >> 8) ^ CRC32_TABLE.get(idx).copied().unwrap_or(0);
     }
     !crc
 }
@@ -195,15 +196,18 @@ pub fn load_snapshot(path: &Path) -> Result<Option<PersistedSnapshot>, Persisten
         ));
     }
 
-    let magic = &bytes[0..8];
+    let magic = bytes
+        .get(0..8)
+        .ok_or_else(|| PersistenceError::CorruptData("Failed to read magic".to_owned()))?;
     if magic != SNAPSHOT_MAGIC {
         return Err(PersistenceError::InvalidMagic);
     }
 
     let version = u32::from_le_bytes(
-        bytes[8..12]
-            .try_into()
-            .map_err(|_| PersistenceError::CorruptData("Failed to read version".to_owned()))?,
+        bytes
+            .get(8..12)
+            .and_then(|slice| slice.try_into().ok())
+            .ok_or_else(|| PersistenceError::CorruptData("Failed to read version".to_owned()))?,
     );
     if version != CURRENT_VERSION {
         return Err(PersistenceError::VersionMismatch {
@@ -213,18 +217,22 @@ pub fn load_snapshot(path: &Path) -> Result<Option<PersistedSnapshot>, Persisten
     }
 
     let expected_crc = u32::from_le_bytes(
-        bytes[12..16]
-            .try_into()
-            .map_err(|_| PersistenceError::CorruptData("Failed to read crc".to_owned()))?,
+        bytes
+            .get(12..16)
+            .and_then(|slice| slice.try_into().ok())
+            .ok_or_else(|| PersistenceError::CorruptData("Failed to read crc".to_owned()))?,
     );
 
     let payload_len = u64::from_le_bytes(
-        bytes[16..24]
-            .try_into()
-            .map_err(|_| PersistenceError::CorruptData("Failed to read length".to_owned()))?,
+        bytes
+            .get(16..24)
+            .and_then(|slice| slice.try_into().ok())
+            .ok_or_else(|| PersistenceError::CorruptData("Failed to read length".to_owned()))?,
     ) as usize;
 
-    let payload = &bytes[24..];
+    let payload = bytes
+        .get(24..)
+        .ok_or_else(|| PersistenceError::CorruptData("Failed to read payload".to_owned()))?;
     if payload.len() != payload_len {
         return Err(PersistenceError::CorruptData(format!(
             "Payload length mismatch: expected {payload_len}, found {}",

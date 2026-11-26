@@ -810,7 +810,9 @@ impl SearchApp {
             .body(|body| {
                 body.rows(row_height, self.rows.len(), |mut row| {
                     let index = row.index();
-                    let result = &self.rows[index];
+                    let Some(result) = self.rows.get(index) else {
+                        return;
+                    };
                     row.set_selected(selected == Some(index));
                     row.col(|ui| {
                         let icon = if result.is_folder {
@@ -863,9 +865,7 @@ impl SearchApp {
                             action = Some((index, RowAction::Open(OpenAction::Reveal)));
                             ui.close();
                         }
-                        if !is_folder
-                            && ui.button("Übergeordneten Ordner öffnen").clicked()
-                        {
+                        if !is_folder && ui.button("Übergeordneten Ordner öffnen").clicked() {
                             action = Some((index, RowAction::Open(OpenAction::OpenFolder)));
                             ui.close();
                         }
@@ -1192,11 +1192,10 @@ fn is_volume_root(path: &Path) -> bool {
         }
         let lossy = path.to_string_lossy();
         let stripped = lossy.strip_prefix(r"\\?\").unwrap_or(&lossy);
-        let bytes = stripped.as_bytes();
-        bytes.len() == 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && (bytes[2] == b'\\' || bytes[2] == b'/')
+        matches!(
+            stripped.as_bytes(),
+            [drive, b':', b'\\' | b'/'] if drive.is_ascii_alphabetic()
+        )
     }
 }
 

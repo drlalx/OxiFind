@@ -1,4 +1,9 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use oxifind::{
     persistence::{
@@ -173,9 +178,7 @@ fn test_settings_save_and_load_roundtrip() {
 
 #[test]
 fn test_worker_cold_start_and_recovery_workflow() {
-    use oxifind::engine::{
-        IndexScope, WorkerResponse, spawn_search_worker_with_snapshot,
-    };
+    use oxifind::engine::{IndexScope, WorkerResponse, spawn_search_worker_with_snapshot};
     use std::sync::mpsc;
 
     let temp_dir = std::env::temp_dir().join(format!("oxifind-cold-test-{}", std::process::id()));

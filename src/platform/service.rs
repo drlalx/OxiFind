@@ -160,12 +160,12 @@ pub fn schtasks_delay_value(delay_seconds: u32) -> String {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 pub mod linux {
+    use super::{ServiceStatus, systemd_unit_content_with_root};
     use std::{
         fs, io,
         path::{Path, PathBuf},
         process::Command,
     };
-    use super::{ServiceStatus, systemd_unit_content_with_root};
 
     pub fn user_unit_dir() -> io::Result<PathBuf> {
         if let Some(config_dir) = std::env::var_os("XDG_CONFIG_HOME") {
@@ -211,8 +211,7 @@ pub mod linux {
         fs::create_dir_all(&unit_dir)?;
         let unit_path = unit_dir.join("oxifind.service");
 
-        let exe_path = std::env::current_exe()
-            .unwrap_or_else(|_| PathBuf::from("oxifind"));
+        let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("oxifind"));
         let exe_str = exe_path.display().to_string();
 
         fs::write(
@@ -290,8 +289,8 @@ pub mod linux {
 
 #[cfg(windows)]
 pub mod windows {
-    use std::{io, path::Path, process::Command};
     use super::{ServiceStatus, schtasks_delay_value};
+    use std::{io, path::Path, process::Command};
 
     pub fn service_status() -> ServiceStatus {
         let output = Command::new("schtasks.exe")
@@ -314,7 +313,11 @@ pub mod windows {
     pub fn install_service(delay_seconds: u32, root: Option<&Path>) -> io::Result<()> {
         let exe_path = std::env::current_exe()?;
         let exe_str = match root {
-            Some(path) => format!("\"{}\" --service \"{}\"", exe_path.display(), path.display()),
+            Some(path) => format!(
+                "\"{}\" --service \"{}\"",
+                exe_path.display(),
+                path.display()
+            ),
             None => format!("\"{}\" --service", exe_path.display()),
         };
 
@@ -389,12 +392,12 @@ pub mod windows {
 
 #[cfg(target_os = "macos")]
 pub mod macos {
+    use super::ServiceStatus;
     use std::{
         fs, io,
         path::{Path, PathBuf},
         process::Command,
     };
-    use super::ServiceStatus;
 
     pub fn plist_path() -> io::Result<PathBuf> {
         let home = std::env::var_os("HOME")
@@ -519,8 +522,14 @@ mod tests {
 
     #[test]
     fn service_status_labels_are_defined() {
-        assert_eq!(ServiceStatus::Active.label(), "Aktiv (läuft im Hintergrund)");
-        assert_eq!(ServiceStatus::Inactive.label(), "Installiert (inaktiv/gestoppt)");
+        assert_eq!(
+            ServiceStatus::Active.label(),
+            "Aktiv (läuft im Hintergrund)"
+        );
+        assert_eq!(
+            ServiceStatus::Inactive.label(),
+            "Installiert (inaktiv/gestoppt)"
+        );
         assert_eq!(ServiceStatus::NotInstalled.label(), "Nicht installiert");
     }
 
@@ -552,15 +561,19 @@ mod tests {
             15,
             Some(Path::new("/home/user/My Docs")),
         );
-        assert!(unit.contains(
-            "ExecStart=/usr/bin/oxifind --service --delay 15 \"/home/user/My Docs\"\n"
-        ));
+        assert!(
+            unit.contains(
+                "ExecStart=/usr/bin/oxifind --service --delay 15 \"/home/user/My Docs\"\n"
+            )
+        );
 
         let plain = super::systemd_unit_content_with_root(
             "/usr/bin/oxifind",
             15,
             Some(Path::new("/home/user/Sync")),
         );
-        assert!(plain.contains("ExecStart=/usr/bin/oxifind --service --delay 15 /home/user/Sync\n"));
+        assert!(
+            plain.contains("ExecStart=/usr/bin/oxifind --service --delay 15 /home/user/Sync\n")
+        );
     }
 }

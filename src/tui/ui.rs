@@ -25,7 +25,13 @@ pub const COLOR_DANGER: Color = Color::Rgb(239, 68, 68);
 pub fn render(frame: &mut Frame, app: &mut TuiApp) {
     let size = frame.area();
 
-    let chunks = Layout::default()
+    let [
+        header_area,
+        search_area,
+        table_area,
+        details_area,
+        footer_area,
+    ] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header & status bar
@@ -34,13 +40,13 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp) {
             Constraint::Length(3), // Selected Item Details
             Constraint::Length(1), // Footer Keybinding hints
         ])
-        .split(size);
+        .areas(size);
 
-    render_header(frame, app, chunks[0]);
-    render_search_bar(frame, app, chunks[1]);
-    render_table(frame, app, chunks[2]);
-    render_details(frame, app, chunks[3]);
-    render_footer(frame, app, chunks[4]);
+    render_header(frame, app, header_area);
+    render_search_bar(frame, app, search_area);
+    render_table(frame, app, table_area);
+    render_details(frame, app, details_area);
+    render_footer(frame, app, footer_area);
 
     if let Some(modal) = &app.active_modal {
         render_modal(frame, modal, size);
@@ -127,10 +133,10 @@ fn render_search_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
         COLOR_BORDER
     };
 
-    let chunks = Layout::default()
+    let [input_area, chips_area] = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(20), Constraint::Length(34)])
-        .split(area);
+        .areas(area);
 
     // Left: Search input
     let search_title = if is_focused {
@@ -160,12 +166,12 @@ fn render_search_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     };
 
     let search_paragraph = Paragraph::new(Line::from(vec![input_text])).block(input_block);
-    frame.render_widget(search_paragraph, chunks[0]);
+    frame.render_widget(search_paragraph, input_area);
 
     if is_focused {
         frame.set_cursor_position((
-            chunks[0].x + 1 + (app.cursor as u16).min(chunks[0].width.saturating_sub(3)),
-            chunks[0].y + 1,
+            input_area.x + 1 + (app.cursor as u16).min(input_area.width.saturating_sub(3)),
+            input_area.y + 1,
         ));
     }
 
@@ -197,7 +203,7 @@ fn render_search_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
         .title(" Toggles (Alt+Key) ");
 
     let chips_paragraph = Paragraph::new(chips_line).block(chips_block);
-    frame.render_widget(chips_paragraph, chunks[1]);
+    frame.render_widget(chips_paragraph, chips_area);
 }
 
 fn render_table(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
@@ -254,16 +260,22 @@ fn render_table(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
                 let name_lower = name.to_lowercase();
                 if let Some(pos) = name_lower.find(&query_lower) {
                     let end = pos + query_lower.len();
-                    Line::from(vec![
-                        Span::raw(name[..pos].to_owned()),
-                        Span::styled(
-                            name[pos..end].to_owned(),
-                            Style::default()
-                                .fg(COLOR_HIGHLIGHT)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(name[end..].to_owned()),
-                    ])
+                    if let (Some(before), Some(matched), Some(after)) =
+                        (name.get(..pos), name.get(pos..end), name.get(end..))
+                    {
+                        Line::from(vec![
+                            Span::raw(before.to_owned()),
+                            Span::styled(
+                                matched.to_owned(),
+                                Style::default()
+                                    .fg(COLOR_HIGHLIGHT)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::raw(after.to_owned()),
+                        ])
+                    } else {
+                        Line::from(name)
+                    }
                 } else {
                     Line::from(name)
                 }
@@ -445,21 +457,23 @@ fn render_modal(frame: &mut Frame, modal: &TuiModal, area: Rect) {
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup_layout = Layout::default()
+    let [_, vertical_center, _] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Percentage((100 - percent_y) / 2),
             Constraint::Percentage(percent_y),
             Constraint::Percentage((100 - percent_y) / 2),
         ])
-        .split(area);
+        .areas(area);
 
-    Layout::default()
+    let [_, center, _] = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Percentage((100 - percent_x) / 2),
             Constraint::Percentage(percent_x),
             Constraint::Percentage((100 - percent_x) / 2),
         ])
-        .split(popup_layout[1])[1]
+        .areas(vertical_center);
+
+    center
 }

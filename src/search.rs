@@ -321,7 +321,9 @@ impl SearchIndex {
                         if let Some(Some(entry)) = slots.get(index) {
                             paths.remove(&entry.path);
                         }
-                        slots[index] = None;
+                        if let Some(slot) = slots.get_mut(index) {
+                            *slot = None;
+                        }
                     }
                 }
                 IndexUpdate::RemovePath(path) => {
@@ -331,7 +333,9 @@ impl SearchIndex {
                         {
                             positions.remove(&(entry.metadata.volume_identity.clone(), file_id));
                         }
-                        slots[index] = None;
+                        if let Some(slot) = slots.get_mut(index) {
+                            *slot = None;
+                        }
                     }
                 }
                 IndexUpdate::ReplaceVolume {
@@ -350,7 +354,7 @@ impl SearchIndex {
                         }
                     }
                     positions.retain(|(identity, _), _| !on_volume(identity));
-                    paths.retain(|_, &mut index| slots[index].is_some());
+                    paths.retain(|_, &mut index| slots.get(index).is_some_and(Option::is_some));
                     for entry in entries {
                         upsert_slot(&mut slots, &mut positions, &mut paths, entry);
                     }
@@ -483,26 +487,47 @@ impl SearchIndex {
             |&(left_score, left_idx): &(u32, usize), &(right_score, right_idx): &(u32, usize)| {
                 let primary = match sort.key {
                     SortKey::Relevance => left_score.cmp(&right_score),
-                    SortKey::Name => self.search_data[left_idx]
-                        .name_lower
-                        .cmp(&self.search_data[right_idx].name_lower)
-                        .then_with(|| {
-                            self.entries[left_idx]
-                                .metadata
-                                .name
-                                .cmp(&self.entries[right_idx].metadata.name)
-                        }),
-                    SortKey::Path => self.search_data[left_idx]
-                        .path_lower
-                        .cmp(&self.search_data[right_idx].path_lower)
-                        .then_with(|| {
-                            self.entries[left_idx]
-                                .path
-                                .cmp(&self.entries[right_idx].path)
-                        }),
-                    SortKey::Type => self.search_data[right_idx]
-                        .is_dir
-                        .cmp(&self.search_data[left_idx].is_dir),
+                    SortKey::Name => match (
+                        self.search_data.get(left_idx),
+                        self.search_data.get(right_idx),
+                    ) {
+                        (Some(left_data), Some(right_data)) => left_data
+                            .name_lower
+                            .cmp(&right_data.name_lower)
+                            .then_with(|| {
+                                match (self.entries.get(left_idx), self.entries.get(right_idx)) {
+                                    (Some(left), Some(right)) => {
+                                        left.metadata.name.cmp(&right.metadata.name)
+                                    }
+                                    _ => Ordering::Equal,
+                                }
+                            }),
+                        _ => Ordering::Equal,
+                    },
+                    SortKey::Path => match (
+                        self.search_data.get(left_idx),
+                        self.search_data.get(right_idx),
+                    ) {
+                        (Some(left_data), Some(right_data)) => left_data
+                            .path_lower
+                            .cmp(&right_data.path_lower)
+                            .then_with(|| {
+                                match (self.entries.get(left_idx), self.entries.get(right_idx)) {
+                                    (Some(left), Some(right)) => left.path.cmp(&right.path),
+                                    _ => Ordering::Equal,
+                                }
+                            }),
+                        _ => Ordering::Equal,
+                    },
+                    SortKey::Type => match (
+                        self.search_data.get(left_idx),
+                        self.search_data.get(right_idx),
+                    ) {
+                        (Some(left_data), Some(right_data)) => {
+                            right_data.is_dir.cmp(&left_data.is_dir)
+                        }
+                        _ => Ordering::Equal,
+                    },
                 };
                 let primary = if sort.descending {
                     primary.reverse()
@@ -522,7 +547,7 @@ impl SearchIndex {
 
         matches
             .into_iter()
-            .map(|(_, idx)| &self.entries[idx])
+            .filter_map(|(_, idx)| self.entries.get(idx))
             .collect()
     }
 }
@@ -547,19 +572,23 @@ fn upsert_slot(
     // Check if an entry with this file_id already exists on this volume
     if let Some(file_id) = entry.metadata.file_id {
         let key = (entry.metadata.volume_identity.clone(), file_id);
-        if let Some(&index) = positions.get(&key) {
-            slots[index] = Some(entry);
+        if let Some(&index) = positions.get(&key)
+            && let Some(slot) = slots.get_mut(index)
+        {
+            *slot = Some(entry);
             paths.insert(path, index);
             return;
         }
     }
 
     // Check if an entry with the exact same path already exists in slots
-    if let Some(&index) = paths.get(&path) {
+    if let Some(&index) = paths.get(&path)
+        && let Some(slot) = slots.get_mut(index)
+    {
         if let Some(file_id) = entry.metadata.file_id {
             positions.insert((entry.metadata.volume_identity.clone(), file_id), index);
         }
-        slots[index] = Some(entry);
+        *slot = Some(entry);
         return;
     }
 
@@ -575,11 +604,8 @@ fn compare_case_insensitive(left: &str, right: &str) -> Ordering {
     if left.is_ascii() && right.is_ascii() {
         let left_bytes = left.as_bytes();
         let right_bytes = right.as_bytes();
-        let len = left_bytes.len().min(right_bytes.len());
-        for i in 0..len {
-            let l = left_bytes[i].to_ascii_lowercase();
-            let r = right_bytes[i].to_ascii_lowercase();
-            match l.cmp(&r) {
+        for (&lb, &rb) in left_bytes.iter().zip(right_bytes.iter()) {
+            match lb.to_ascii_lowercase().cmp(&rb.to_ascii_lowercase()) {
                 Ordering::Equal => continue,
                 ord => return ord,
             }
@@ -662,7 +688,11 @@ fn parse_query(query: &str) -> Query {
         // Modifiers only count before any quote, so quoted text stays literal.
         let head = raw.get(..5);
         if let Some(head) = head.filter(|head| head.eq_ignore_ascii_case("sort:")) {
-            let value = raw[head.len()..].replace('"', "").to_lowercase();
+            let value = raw
+                .get(head.len()..)
+                .unwrap_or_default()
+                .replace('"', "")
+                .to_lowercase();
             let (descending, key) = match value.strip_prefix('-') {
                 Some(key) => (true, key),
                 None => (false, value.as_str()),
@@ -685,7 +715,9 @@ fn parse_query(query: &str) -> Query {
         }
 
         let (kind, rest) = match head {
-            Some(head) if head.eq_ignore_ascii_case("path:") => (TermKind::Path, &raw[5..]),
+            Some(head) if head.eq_ignore_ascii_case("path:") => {
+                (TermKind::Path, raw.get(5..).unwrap_or_default())
+            }
             _ => match (raw.strip_prefix('^'), raw.strip_prefix('=')) {
                 (Some(rest), _) => (TermKind::Prefix, rest),
                 (_, Some(rest)) => (TermKind::Exact, rest),
@@ -761,16 +793,21 @@ pub(crate) fn resolve_entry_paths(entries: &mut [SearchEntry]) -> Vec<IndexIssue
     };
     let positions = entries
         .iter()
+        .zip(volume_of.iter().copied())
         .enumerate()
-        .filter_map(|(index, entry)| Some(((volume_of[index], entry.metadata.file_id?), index)))
+        .filter_map(|(index, (entry, volume))| Some(((volume, entry.metadata.file_id?), index)))
         .collect::<HashMap<_, _>>();
     let mut issues = Vec::new();
 
     for index in 0..entries.len() {
-        let Some(file_id) = entries[index].metadata.file_id else {
+        let Some((file_id, original_path)) = entries.get(index).and_then(|entry| {
+            entry
+                .metadata
+                .file_id
+                .map(|file_id| (file_id, entry.metadata.full_path.clone()))
+        }) else {
             continue;
         };
-        let original_path = entries[index].metadata.full_path.clone();
         let mut lineage = Vec::new();
         let mut visited = HashSet::new();
         let mut current = index;
@@ -784,33 +821,49 @@ pub(crate) fn resolve_entry_paths(entries: &mut [SearchEntry]) -> Vec<IndexIssue
                 break None;
             }
 
-            match entries[current].metadata.parent_id {
-                None => break Some(entries[current].metadata.full_path.clone()),
-                Some(parent_id) => match positions.get(&(volume_of[current], parent_id)) {
-                    Some(parent_index) => {
-                        lineage.push(current);
-                        current = *parent_index;
-                    }
-                    None => {
-                        issues.push(IndexIssue {
-                            path: original_path,
-                            message: format!("Missing parent record {parent_id}"),
-                        });
+            let Some(current_entry) = entries.get(current) else {
+                break None;
+            };
+            match current_entry.metadata.parent_id {
+                None => break Some(current_entry.metadata.full_path.clone()),
+                Some(parent_id) => {
+                    let Some(&current_volume) = volume_of.get(current) else {
                         break None;
+                    };
+                    match positions.get(&(current_volume, parent_id)) {
+                        Some(&parent_index) => {
+                            lineage.push(current);
+                            current = parent_index;
+                        }
+                        None => {
+                            issues.push(IndexIssue {
+                                path: original_path,
+                                message: format!("Missing parent record {parent_id}"),
+                            });
+                            break None;
+                        }
                     }
-                },
+                }
             }
         };
 
-        entries[index].path_resolved = base_path.is_some();
-        if let Some(mut path) = base_path {
+        let resolved_path = base_path.map(|mut path| {
             for child_index in lineage.into_iter().rev() {
-                path = join_child_path(&path, &entries[child_index].metadata.name);
+                if let Some(child) = entries.get(child_index) {
+                    path = join_child_path(&path, &child.metadata.name);
+                }
             }
-            entries[index].metadata.full_path = path;
-            let display = entries[index].metadata.full_path.display().to_string();
-            entries[index].path = display.clone();
-            entries[index].display = display;
+            path
+        });
+
+        if let Some(entry) = entries.get_mut(index) {
+            entry.path_resolved = resolved_path.is_some();
+            if let Some(path) = resolved_path {
+                entry.metadata.full_path = path;
+                let display = entry.metadata.full_path.display().to_string();
+                entry.path = display.clone();
+                entry.display = display;
+            }
         }
     }
 

@@ -1,4 +1,9 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use oxifind::backend::{CliConfig, UiBackend};
 use oxifind::engine::IndexScope;
@@ -50,13 +55,27 @@ fn parses_cli_flags_for_gui() {
 fn parses_cli_flags_for_service() {
     use oxifind::backend::ServiceAction;
 
-    let args = [OsString::from("--service"), OsString::from("--delay"), OsString::from("20")];
+    let args = [
+        OsString::from("--service"),
+        OsString::from("--delay"),
+        OsString::from("20"),
+    ];
     let config = CliConfig::parse(args).expect("valid service flags");
-    assert_eq!(config.service_action, Some(ServiceAction::Run { delay_seconds: 20 }));
+    assert_eq!(
+        config.service_action,
+        Some(ServiceAction::Run { delay_seconds: 20 })
+    );
 
-    let args2 = [OsString::from("service"), OsString::from("install"), OsString::from("--delay=30")];
+    let args2 = [
+        OsString::from("service"),
+        OsString::from("install"),
+        OsString::from("--delay=30"),
+    ];
     let config2 = CliConfig::parse(args2).expect("valid service subcommand");
-    assert_eq!(config2.service_action, Some(ServiceAction::Install { delay_seconds: 30 }));
+    assert_eq!(
+        config2.service_action,
+        Some(ServiceAction::Install { delay_seconds: 30 })
+    );
 
     let args3 = [OsString::from("service"), OsString::from("status")];
     let config3 = CliConfig::parse(args3).expect("valid service status");
@@ -103,7 +122,11 @@ fn rejects_delay_without_service_action() {
     let error = CliConfig::parse(args).expect_err("--delay alone must not be silently ignored");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 
-    let args = [OsString::from("service"), OsString::from("status"), OsString::from("--delay=5")];
+    let args = [
+        OsString::from("service"),
+        OsString::from("status"),
+        OsString::from("--delay=5"),
+    ];
     let error = CliConfig::parse(args).expect_err("--delay for status must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 }
@@ -112,13 +135,27 @@ fn rejects_delay_without_service_action() {
 fn accepts_delay_before_or_after_service_flag() {
     use oxifind::backend::ServiceAction;
 
-    let args = [OsString::from("--delay"), OsString::from("5"), OsString::from("--service")];
+    let args = [
+        OsString::from("--delay"),
+        OsString::from("5"),
+        OsString::from("--service"),
+    ];
     let config = CliConfig::parse(args).expect("delay before --service");
-    assert_eq!(config.service_action, Some(ServiceAction::Run { delay_seconds: 5 }));
+    assert_eq!(
+        config.service_action,
+        Some(ServiceAction::Run { delay_seconds: 5 })
+    );
 
-    let args = [OsString::from("--delay=0"), OsString::from("service"), OsString::from("run")];
+    let args = [
+        OsString::from("--delay=0"),
+        OsString::from("service"),
+        OsString::from("run"),
+    ];
     let config = CliConfig::parse(args).expect("delay before service run");
-    assert_eq!(config.service_action, Some(ServiceAction::Run { delay_seconds: 0 }));
+    assert_eq!(
+        config.service_action,
+        Some(ServiceAction::Run { delay_seconds: 0 })
+    );
 }
 
 #[test]

@@ -229,7 +229,12 @@ impl CliConfig {
             scope_path = Some(PathBuf::from(arg));
         }
 
-        if delay_given && !matches!(service_action, Some(ServiceAction::Run { .. } | ServiceAction::Install { .. })) {
+        if delay_given
+            && !matches!(
+                service_action,
+                Some(ServiceAction::Run { .. } | ServiceAction::Install { .. })
+            )
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "--delay requires --service, 'service run' or 'service install'",

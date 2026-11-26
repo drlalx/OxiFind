@@ -620,7 +620,7 @@ fn collect_records(
             break;
         };
 
-        let parsed = parse_records(&chunk[NEXT_REFERENCE_LEN..]);
+        let parsed = parse_records(chunk.get(NEXT_REFERENCE_LEN..).unwrap_or_default());
         for defect in parsed.defects {
             record_issue(issues, volume_root, defect);
         }
@@ -911,11 +911,12 @@ fn volume_root_path(path: &Path) -> io::Result<PathBuf> {
     {
         let lossy = path.to_string_lossy();
         if let Some(rest) = lossy.strip_prefix(r"\\?\") {
-            let bytes = rest.as_bytes();
-            if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            if let [drive, b':', ..] = rest.as_bytes()
+                && drive.is_ascii_alphabetic()
+            {
                 return Ok(PathBuf::from(format!(
                     "{}:\\",
-                    (bytes[0] as char).to_ascii_uppercase()
+                    (*drive as char).to_ascii_uppercase()
                 )));
             }
             return Err(io::Error::new(
@@ -929,11 +930,12 @@ fn volume_root_path(path: &Path) -> io::Result<PathBuf> {
                 format!("{} does not name a local drive volume", path.display()),
             ));
         }
-        let bytes = lossy.as_bytes();
-        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        if let [drive, b':', ..] = lossy.as_bytes()
+            && drive.is_ascii_alphabetic()
+        {
             return Ok(PathBuf::from(format!(
                 "{}:\\",
-                (bytes[0] as char).to_ascii_uppercase()
+                (*drive as char).to_ascii_uppercase()
             )));
         }
         Err(io::Error::new(
@@ -1285,7 +1287,11 @@ mod windows_volume {
             .iter()
             .position(|&unit| unit == 0)
             .unwrap_or(filesystem_name_buffer.len());
-        Ok(String::from_utf16_lossy(&filesystem_name_buffer[..end]))
+        Ok(String::from_utf16_lossy(
+            filesystem_name_buffer
+                .get(..end)
+                .unwrap_or(&filesystem_name_buffer),
+        ))
     }
 
     /// Validates read access to `volume_root` by opening its raw device path

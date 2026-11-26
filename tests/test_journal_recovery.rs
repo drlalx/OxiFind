@@ -1,4 +1,9 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use oxifind::{
     ntfs::{
@@ -260,12 +265,8 @@ fn test_first_run_snapshot_and_cold_start_recovery() {
     let _ = fs::create_dir_all(&temp_dir);
     let snapshot_path = temp_dir.join("index.snapshot");
 
-    save_snapshot(
-        &snapshot_path,
-        index.journal_checkpoints(),
-        index.entries(),
-    )
-    .expect("Persisting snapshot must succeed");
+    save_snapshot(&snapshot_path, index.journal_checkpoints(), index.entries())
+        .expect("Persisting snapshot must succeed");
 
     let loaded = load_snapshot(&snapshot_path)
         .expect("Loading snapshot must succeed")
@@ -304,12 +305,7 @@ fn test_continuous_journal_update_advances_checkpoint() {
     })
     .with_change_chunk(journal_chunk);
 
-    let source = NtfsMftSource::with_parts_and_journal(
-        r"C:\",
-        inspector,
-        enumerator,
-        journal,
-    );
+    let source = NtfsMftSource::with_parts_and_journal(r"C:\", inspector, enumerator, journal);
 
     let mut index = SearchIndex::from_source(&source).unwrap();
     assert_eq!(index.len(), 3);
@@ -330,10 +326,8 @@ fn test_continuous_journal_update_advances_checkpoint() {
 fn test_journal_wrap_purged_records_triggers_full_volume_rebuild() {
     let inspector = MockVolumeInspector::new("NTFS");
     // Provide chunks for initial load AND subsequent re-enumeration on rebuild
-    let enumerator = MockEnumerator::with_chunks(vec![
-        standard_volume_chunk(),
-        standard_volume_chunk(),
-    ]);
+    let enumerator =
+        MockEnumerator::with_chunks(vec![standard_volume_chunk(), standard_volume_chunk()]);
 
     let journal = MockJournalReader::new(JournalState {
         journal_id: 100,
@@ -388,10 +382,8 @@ fn test_journal_wrap_purged_records_triggers_full_volume_rebuild() {
 #[test]
 fn test_journal_recreation_triggers_rebuild() {
     let inspector = MockVolumeInspector::new("NTFS");
-    let enumerator = MockEnumerator::with_chunks(vec![
-        standard_volume_chunk(),
-        standard_volume_chunk(),
-    ]);
+    let enumerator =
+        MockEnumerator::with_chunks(vec![standard_volume_chunk(), standard_volume_chunk()]);
 
     let journal = MockJournalReader::new(JournalState {
         journal_id: 100,
@@ -399,12 +391,8 @@ fn test_journal_recreation_triggers_rebuild() {
         next_usn: 100,
     });
 
-    let source = NtfsMftSource::with_parts_and_journal(
-        r"C:\",
-        inspector,
-        enumerator,
-        journal.clone(),
-    );
+    let source =
+        NtfsMftSource::with_parts_and_journal(r"C:\", inspector, enumerator, journal.clone());
 
     let mut index = SearchIndex::from_source(&source).unwrap();
     assert_eq!(index.journal_checkpoints()[0].journal_id, 100);
@@ -419,7 +407,10 @@ fn test_journal_recreation_triggers_rebuild() {
     let batch = UpdateBatch::collect(&source, index.journal_checkpoints()).unwrap();
 
     assert_eq!(batch.updates.len(), 1);
-    assert!(matches!(batch.updates[0], IndexUpdate::ReplaceVolume { .. }));
+    assert!(matches!(
+        batch.updates[0],
+        IndexUpdate::ReplaceVolume { .. }
+    ));
     assert_eq!(batch.issues.len(), 1);
     assert!(
         batch.issues[0].message.contains("recreated"),
@@ -436,10 +427,8 @@ fn test_journal_recreation_triggers_rebuild() {
 #[test]
 fn test_journal_checkpoint_past_end_corruption_triggers_rebuild() {
     let inspector = MockVolumeInspector::new("NTFS");
-    let enumerator = MockEnumerator::with_chunks(vec![
-        standard_volume_chunk(),
-        standard_volume_chunk(),
-    ]);
+    let enumerator =
+        MockEnumerator::with_chunks(vec![standard_volume_chunk(), standard_volume_chunk()]);
 
     let journal = MockJournalReader::new(JournalState {
         journal_id: 100,
@@ -447,12 +436,8 @@ fn test_journal_checkpoint_past_end_corruption_triggers_rebuild() {
         next_usn: 50,
     });
 
-    let source = NtfsMftSource::with_parts_and_journal(
-        r"C:\",
-        inspector,
-        enumerator,
-        journal.clone(),
-    );
+    let source =
+        NtfsMftSource::with_parts_and_journal(r"C:\", inspector, enumerator, journal.clone());
 
     let index = SearchIndex::from_source(&source).unwrap();
 
@@ -466,9 +451,14 @@ fn test_journal_checkpoint_past_end_corruption_triggers_rebuild() {
     let batch = UpdateBatch::collect(&source, index.journal_checkpoints()).unwrap();
 
     assert_eq!(batch.updates.len(), 1);
-    assert!(matches!(batch.updates[0], IndexUpdate::ReplaceVolume { .. }));
+    assert!(matches!(
+        batch.updates[0],
+        IndexUpdate::ReplaceVolume { .. }
+    ));
     assert!(
-        batch.issues[0].message.contains("is past the journal's next USN"),
+        batch.issues[0]
+            .message
+            .contains("is past the journal's next USN"),
         "Issue message: {}",
         batch.issues[0].message
     );
@@ -480,16 +470,14 @@ fn test_unsupported_volume_filesystem_explicit_error() {
     let enumerator = MockEnumerator::with_chunks(vec![standard_volume_chunk()]);
     let journal = MockJournalReader::new(JournalState::default());
 
-    let source = NtfsMftSource::with_parts_and_journal(
-        r"D:\",
-        inspector,
-        enumerator.clone(),
-        journal,
-    );
+    let source =
+        NtfsMftSource::with_parts_and_journal(r"D:\", inspector, enumerator.clone(), journal);
 
     let mut entries = Vec::new();
     let mut issues = Vec::new();
-    let err = source.collect_initial(&mut entries, &mut issues).unwrap_err();
+    let err = source
+        .collect_initial(&mut entries, &mut issues)
+        .unwrap_err();
 
     assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     assert!(
@@ -500,7 +488,11 @@ fn test_unsupported_volume_filesystem_explicit_error() {
         err.to_string().contains("only NTFS volumes are supported"),
         "Error message: {err}"
     );
-    assert_eq!(enumerator.opened_count.get(), 0, "Enumerator must never be opened");
+    assert_eq!(
+        enumerator.opened_count.get(),
+        0,
+        "Enumerator must never be opened"
+    );
 }
 
 #[test]
@@ -509,19 +501,21 @@ fn test_inaccessible_volume_permission_denied() {
     let enumerator = MockEnumerator::with_chunks(vec![standard_volume_chunk()]);
     let journal = MockJournalReader::new(JournalState::default());
 
-    let source = NtfsMftSource::with_parts_and_journal(
-        r"C:\",
-        inspector,
-        enumerator.clone(),
-        journal,
-    );
+    let source =
+        NtfsMftSource::with_parts_and_journal(r"C:\", inspector, enumerator.clone(), journal);
 
     let mut entries = Vec::new();
     let mut issues = Vec::new();
-    let err = source.collect_initial(&mut entries, &mut issues).unwrap_err();
+    let err = source
+        .collect_initial(&mut entries, &mut issues)
+        .unwrap_err();
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
-    assert_eq!(enumerator.opened_count.get(), 0, "Enumerator must never be opened");
+    assert_eq!(
+        enumerator.opened_count.get(),
+        0,
+        "Enumerator must never be opened"
+    );
 }
 
 #[test]
@@ -551,22 +545,29 @@ fn test_multi_volume_mixed_resilience() {
         MockJournalReader::new(JournalState::default()),
     );
 
-    let multi_source = NtfsMultiVolumeSource::with_sources(vec![
-        good_volume,
-        fat32_volume,
-        denied_volume,
-    ]);
+    let multi_source =
+        NtfsMultiVolumeSource::with_sources(vec![good_volume, fat32_volume, denied_volume]);
 
     let mut entries = Vec::new();
     let mut issues = Vec::new();
     let res = multi_source.collect_initial(&mut entries, &mut issues);
 
-    assert!(res.is_ok(), "Multi volume collection should succeed if at least one volume is valid");
+    assert!(
+        res.is_ok(),
+        "Multi volume collection should succeed if at least one volume is valid"
+    );
     assert_eq!(entries.len(), 3, "Valid volume entries must be retained");
-    assert_eq!(issues.len(), 2, "Issues must be recorded for failed volumes");
+    assert_eq!(
+        issues.len(),
+        2,
+        "Issues must be recorded for failed volumes"
+    );
 
     assert!(issues[0].message.contains("FAT32"));
-    assert!(issues[1].message.contains("PermissionDenied") || issues[1].message.contains("Access is denied"));
+    assert!(
+        issues[1].message.contains("PermissionDenied")
+            || issues[1].message.contains("Access is denied")
+    );
 }
 
 #[test]
@@ -585,14 +586,13 @@ fn test_multi_volume_all_failing_reports_explicit_error() {
         MockJournalReader::new(JournalState::default()),
     );
 
-    let multi_source = NtfsMultiVolumeSource::with_sources(vec![
-        fat32_volume,
-        denied_volume,
-    ]);
+    let multi_source = NtfsMultiVolumeSource::with_sources(vec![fat32_volume, denied_volume]);
 
     let mut entries = Vec::new();
     let mut issues = Vec::new();
-    let err = multi_source.collect_initial(&mut entries, &mut issues).unwrap_err();
+    let err = multi_source
+        .collect_initial(&mut entries, &mut issues)
+        .unwrap_err();
 
     assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     assert!(err.to_string().contains(r"D:\"));

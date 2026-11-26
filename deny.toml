@@ -1,9 +1,9 @@
-# Configuration for cargo-deny (https://github.com/EmbarkStudios/cargo-deny)
+# Configuration for cargo-deny (https://github.com/EmbarkStudios/cargo-deny).
+# Keep the license allow list in sync with tests/license_compliance.rs.
 
 [licenses]
-# The lint level for crates that do not have a license
 unlicensed = "deny"
-# List of explicitly allowed licenses (permissive and MIT-compatible)
+copyleft = "deny"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -19,23 +19,24 @@ allow = [
     "Ubuntu-font-1.0",
     "Unlicense",
     "CC0-1.0",
+    "CDLA-Permissive-2.0",
 ]
-# Confidence threshold for license detection (0.0 - 1.0)
 confidence-threshold = 0.8
-# Fail if any non-allowed license is encountered
-copyleft = "deny"
 
 [licenses.private]
-# Ignore internal/workspace crates that are not published
-ignore = false
+ignore = true
+
+[advisories]
+yanked = "deny"
 
 [bans]
-# Lint level for crates with security advisories or multiple versions
 multiple-versions = "warn"
-wildcards = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
 
 [sources]
-# Lint level for unknown git or registry sources
-unknown-registry = "warn"
-unknown-git = "warn"
+unknown-registry = "deny"
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Temporary workaround for mixed-DPI window dragging; remove after winit 0.30.x ships the fix.
+allow-git = ["https://github.com/LunaticGhoulPiano/winit"]

@@ -64,13 +64,11 @@ pub(crate) mod windows {
             ));
         }
         match action {
-            OpenAction::OpenWith => {
-                Command::new("rundll32.exe")
-                    .arg("shell32.dll,OpenAs_RunDLL")
-                    .arg(path)
-                    .spawn()
-                    .map(drop)
-            }
+            OpenAction::OpenWith => Command::new("rundll32.exe")
+                .arg("shell32.dll,OpenAs_RunDLL")
+                .arg(path)
+                .spawn()
+                .map(drop),
             OpenAction::Open | OpenAction::Reveal | OpenAction::OpenFolder => {
                 // Explorer reports a failure exit code even after opening successfully, so only spawning is checked.
                 Command::new("explorer.exe")
@@ -253,7 +251,10 @@ mod tests {
 
     #[test]
     fn containing_folder_of_relative_file_is_current_directory() {
-        assert_eq!(super::containing_folder(Path::new("file.txt")), Path::new("."));
+        assert_eq!(
+            super::containing_folder(Path::new("file.txt")),
+            Path::new(".")
+        );
         assert_eq!(
             super::containing_folder(Path::new("dir/file.txt")),
             Path::new("dir")

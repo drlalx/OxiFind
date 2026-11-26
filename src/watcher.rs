@@ -1,7 +1,5 @@
 //! Cross-platform filesystem watcher using the `notify` crate for live index updates.
 
-#[cfg(target_os = "linux")]
-use std::{collections::VecDeque, io, path::Path};
 use std::{
     collections::HashSet,
     fs,
@@ -11,6 +9,8 @@ use std::{
         mpsc::{Receiver, channel},
     },
 };
+#[cfg(target_os = "linux")]
+use std::{collections::VecDeque, io, path::Path};
 
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -67,7 +67,11 @@ fn is_watch_limit_error(err: &notify::Error) -> bool {
         )
 }
 
-fn build_search_entry(path: PathBuf, file_type: &fs::FileType, metadata: &fs::Metadata) -> SearchEntry {
+fn build_search_entry(
+    path: PathBuf,
+    file_type: &fs::FileType,
+    metadata: &fs::Metadata,
+) -> SearchEntry {
     let attributes = compute_attributes(&path, file_type, Some(metadata));
     let file_id = compute_file_id(Some(metadata));
     let display = path.display().to_string();
@@ -249,7 +253,10 @@ impl DirectoryWatcher {
                         Err(err) => {
                             issues.push(IndexIssue {
                                 path: dir.clone(),
-                                message: format!("Could not watch directory {}: {err}", dir.display()),
+                                message: format!(
+                                    "Could not watch directory {}: {err}",
+                                    dir.display()
+                                ),
                             });
                             continue;
                         }
@@ -344,7 +351,8 @@ impl DirectoryWatcher {
             } else {
                 // Item removed or renamed away
                 #[cfg(target_os = "linux")]
-                self.watched_dirs.retain(|watched| !watched.starts_with(&path));
+                self.watched_dirs
+                    .retain(|watched| !watched.starts_with(&path));
                 out_updates.push(IndexUpdate::RemovePath(path.display().to_string()));
             }
         }
@@ -485,11 +493,15 @@ mod tests {
         }
 
         assert!(
-            updates.iter().any(|u| matches!(u, IndexUpdate::Upsert(e) if e.metadata.name == "live.rs")),
+            updates
+                .iter()
+                .any(|u| matches!(u, IndexUpdate::Upsert(e) if e.metadata.name == "live.rs")),
             "expected newly created nested file to be detected: {updates:?}"
         );
         assert!(
-            !updates.iter().any(|u| matches!(u, IndexUpdate::Upsert(e) if e.metadata.name == "ignored.js")),
+            !updates
+                .iter()
+                .any(|u| matches!(u, IndexUpdate::Upsert(e) if e.metadata.name == "ignored.js")),
             "excluded directory file must not be emitted: {updates:?}"
         );
     }
@@ -503,10 +515,13 @@ mod tests {
             fs::create_dir_all(root.join(format!("dir_{idx}"))).unwrap();
         }
 
-        let (watcher, issues) =
-            DirectoryWatcher::with_options(&[root.to_path_buf()], &[], &[], 2);
+        let (watcher, issues) = DirectoryWatcher::with_options(&[root.to_path_buf()], &[], &[], 2);
 
         assert_eq!(watcher.watched_dir_count(), 2);
-        assert_eq!(issues.len(), 1, "expected exactly 1 budget warning: {issues:?}");
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected exactly 1 budget warning: {issues:?}"
+        );
     }
 }

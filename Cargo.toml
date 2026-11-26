@@ -2,8 +2,14 @@
 name = "oxifind"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+authors = ["Alexander Drichel"]
 description = "Fast cross-platform file search engine in Rust with egui GUI, Ratatui TUI, and background indexing daemon."
-
+readme = "README.md"
+homepage = "https://github.com/drlalx/OxiFind"
+repository = "https://github.com/drlalx/OxiFind"
+keywords = ["search", "files", "indexer", "ntfs", "egui"]
+categories = ["command-line-utilities", "filesystem"]
 license = "MIT"
 
 [target.'cfg(windows)'.dependencies]
@@ -43,6 +49,9 @@ panic_in_result_fn = "deny"
 unimplemented = "deny"
 todo = "deny"
 unreachable = "deny"
+indexing_slicing = "deny"
+undocumented_unsafe_blocks = "deny"
+dbg_macro = "deny"
 
 [profile.release]
 opt-level = 3

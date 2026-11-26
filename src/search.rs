@@ -289,6 +289,164 @@ impl SearchIndex {
             return;
         }
 
+        if self.try_apply_updates_incremental(&updates) {
+            return;
+        }
+
+        self.apply_updates_full(updates);
+    }
+
+    /// Fast path for batches that only touch non-directory entries (typical live USN/watcher churn).
+    ///
+    /// Avoids rebuilding million-entry hash maps, full path resolution, full sort, and lowercase
+    /// rebuilds on every background tick. Returns `false` if a full rebuild is required (e.g.
+    /// volume replacement, directory change, or unresolved parent).
+    fn try_apply_updates_incremental(&mut self, updates: &[IndexUpdate]) -> bool {
+        if !self.resolution_issues.is_empty() {
+            return false;
+        }
+
+        let mut wanted_ids: HashSet<u128> = HashSet::new();
+        let mut wanted_parents: HashSet<u128> = HashSet::new();
+        let mut wanted_paths: HashSet<&str> = HashSet::new();
+
+        for update in updates {
+            match update {
+                IndexUpdate::ReplaceVolume { .. } => return false,
+                IndexUpdate::Upsert(entry) => {
+                    if is_directory(entry) {
+                        return false;
+                    }
+                    if let Some(file_id) = entry.metadata.file_id {
+                        wanted_ids.insert(file_id);
+                    }
+                    if let Some(parent_id) = entry.metadata.parent_id {
+                        wanted_parents.insert(parent_id);
+                    }
+                    wanted_paths.insert(entry.path.as_str());
+                }
+                IndexUpdate::Remove { file_id, .. } => {
+                    wanted_ids.insert(*file_id);
+                }
+                IndexUpdate::RemovePath(path) => {
+                    wanted_paths.insert(path.as_str());
+                }
+            }
+        }
+
+        let mut parent_paths: HashMap<(Option<String>, u128), PathBuf> = HashMap::new();
+
+        for entry in &self.entries {
+            // If any existing entry has a parent that is being modified/removed, fall back to full rebuild
+            // so all descendant paths are re-resolved accurately.
+            if let Some(parent_id) = entry.metadata.parent_id
+                && wanted_ids.contains(&parent_id)
+            {
+                return false;
+            }
+            if let Some(file_id) = entry.metadata.file_id
+                && wanted_parents.contains(&file_id)
+                && entry.path_resolved
+            {
+                parent_paths.insert(
+                    (entry.metadata.volume_identity.clone(), file_id),
+                    entry.metadata.full_path.clone(),
+                );
+            }
+        }
+
+        // Pre-validate that every parent referenced by an Upsert is known and resolved.
+        for update in updates {
+            if let IndexUpdate::Upsert(entry) = update
+                && let Some(parent_id) = entry.metadata.parent_id
+            {
+                let key = (entry.metadata.volume_identity.clone(), parent_id);
+                if !parent_paths.contains_key(&key) {
+                    return false;
+                }
+            }
+        }
+
+        for update in updates {
+            match update {
+                IndexUpdate::Upsert(raw_entry) => {
+                    let mut entry = raw_entry.clone();
+                    if let Some(parent_id) = entry.metadata.parent_id {
+                        let key = (entry.metadata.volume_identity.clone(), parent_id);
+                        if let Some(parent_path) = parent_paths.get(&key) {
+                            let resolved = join_child_path(parent_path, &entry.metadata.name);
+                            let display = resolved.display().to_string();
+                            entry.metadata.full_path = resolved;
+                            entry.path = display.clone();
+                            entry.display = display;
+                            entry.path_resolved = true;
+                        }
+                    }
+
+                    let search_item = SearchData {
+                        name_lower: entry.metadata.name.to_lowercase(),
+                        path_lower: entry.path.to_lowercase(),
+                        is_dir: is_directory(&entry),
+                    };
+
+                    // Remove any existing version of this entry (by file_id or exact path).
+                    if let Some(existing_idx) = self.entries.iter().position(|existing| {
+                        (entry.metadata.file_id.is_some()
+                            && existing.metadata.file_id == entry.metadata.file_id
+                            && existing.metadata.volume_identity == entry.metadata.volume_identity)
+                            || existing.path == entry.path
+                    }) {
+                        self.entries.remove(existing_idx);
+                        if existing_idx < self.search_data.len() {
+                            self.search_data.remove(existing_idx);
+                        }
+                    }
+
+                    // Insert in sorted `compare_entries` order so empty queries stay sorted.
+                    let insert_idx = self
+                        .entries
+                        .binary_search_by(|existing| compare_entries(existing, &entry))
+                        .unwrap_or_else(|idx| idx);
+                    self.entries.insert(insert_idx, entry);
+                    if insert_idx <= self.search_data.len() {
+                        self.search_data.insert(insert_idx, search_item);
+                    }
+                }
+                IndexUpdate::Remove {
+                    volume_identity,
+                    file_id,
+                } => {
+                    if let Some(idx) = self.entries.iter().position(|existing| {
+                        existing.metadata.file_id == Some(*file_id)
+                            && existing.metadata.volume_identity.as_deref()
+                                == Some(volume_identity.as_str())
+                    }) {
+                        self.entries.remove(idx);
+                        if idx < self.search_data.len() {
+                            self.search_data.remove(idx);
+                        }
+                    }
+                }
+                IndexUpdate::RemovePath(path) => {
+                    if let Some(idx) = self
+                        .entries
+                        .iter()
+                        .position(|existing| existing.path == *path)
+                    {
+                        self.entries.remove(idx);
+                        if idx < self.search_data.len() {
+                            self.search_data.remove(idx);
+                        }
+                    }
+                }
+                IndexUpdate::ReplaceVolume { .. } => return false,
+            }
+        }
+
+        true
+    }
+
+    fn apply_updates_full(&mut self, updates: Vec<IndexUpdate>) {
         let mut slots: Vec<Option<SearchEntry>> = std::mem::take(&mut self.entries)
             .into_iter()
             .map(Some)
@@ -536,6 +694,17 @@ impl SearchIndex {
                 };
                 primary
                     .then_with(|| left_score.cmp(&right_score))
+                    .then_with(|| {
+                        match (
+                            self.search_data.get(left_idx),
+                            self.search_data.get(right_idx),
+                        ) {
+                            (Some(left_data), Some(right_data)) => {
+                                left_data.name_lower.len().cmp(&right_data.name_lower.len())
+                            }
+                            _ => Ordering::Equal,
+                        }
+                    })
                     .then_with(|| left_idx.cmp(&right_idx))
             };
 
@@ -769,10 +938,10 @@ fn score_entry(name_lower: &str, path_lower: &str, terms: &[QueryTerm]) -> Optio
 fn score_term(term: &QueryTerm, name_lower: &str, path_lower: &str) -> Option<u32> {
     let needle = term.needle.as_str();
     match term.kind {
-        TermKind::Contains | TermKind::Prefix if name_lower.starts_with(needle) => Some(0),
-        TermKind::Exact if name_lower == needle => Some(0),
-        TermKind::Contains if name_lower.contains(needle) => Some(1),
-        TermKind::Contains | TermKind::Path if path_lower.contains(needle) => Some(2),
+        TermKind::Contains | TermKind::Exact if name_lower == needle => Some(0),
+        TermKind::Contains | TermKind::Prefix if name_lower.starts_with(needle) => Some(1),
+        TermKind::Contains if name_lower.contains(needle) => Some(2),
+        TermKind::Contains | TermKind::Path if path_lower.contains(needle) => Some(3),
         _ => None,
     }
 }
@@ -1829,5 +1998,90 @@ mod tests {
         assert_eq!(index.len(), 1);
         assert_eq!(index.search("first", 10), Vec::<String>::new());
         assert_eq!(index.search("second", 10), vec!["second.txt"]);
+    }
+
+    #[test]
+    fn exact_filename_match_ranks_above_longer_prefix_matches() {
+        let index = index(vec![
+            entry(
+                "cmd.exe.mui",
+                r"C:\Program Files\WindowsApps\de-DE\cmd.exe.mui",
+            ),
+            entry(
+                "cmd.exe1459490.png",
+                r"C:\Users\drich\AppData\Local\cmd.exe1459490.png",
+            ),
+            entry("cmd.exe", r"C:\Windows\System32\cmd.exe"),
+        ]);
+
+        let results = index.search_results("cmd.exe", 10);
+        assert_eq!(
+            results.first().map(|r| r.path.as_str()),
+            Some(r"C:\Windows\System32\cmd.exe"),
+            "Exact filename match must rank first above prefix matches like cmd.exe.mui"
+        );
+    }
+
+    #[test]
+    fn incremental_file_upserts_and_removals_stay_searchable() {
+        let dir_entry = SearchEntry {
+            display: r"C:\Projects".to_owned(),
+            path: r"C:\Projects".to_owned(),
+            path_resolved: true,
+            metadata: EntryMetadata {
+                name: "Projects".to_owned(),
+                full_path: PathBuf::from(r"C:\Projects"),
+                file_id: Some(10),
+                parent_id: None,
+                attributes: super::FILE_ATTRIBUTE_DIRECTORY,
+                volume_identity: Some(r"C:\".to_owned()),
+            },
+        };
+        let file_entry = SearchEntry {
+            display: "existing.txt".to_owned(),
+            path: "existing.txt".to_owned(),
+            path_resolved: false,
+            metadata: EntryMetadata {
+                name: "existing.txt".to_owned(),
+                full_path: PathBuf::from("existing.txt"),
+                file_id: Some(20),
+                parent_id: Some(10),
+                attributes: 0,
+                volume_identity: Some(r"C:\".to_owned()),
+            },
+        };
+        let mut index = index(vec![dir_entry, file_entry]);
+        assert_eq!(
+            index.search("existing.txt", 5),
+            vec![r"C:\Projects\existing.txt"]
+        );
+
+        let new_file = SearchEntry {
+            display: "fresh.rs".to_owned(),
+            path: "fresh.rs".to_owned(),
+            path_resolved: false,
+            metadata: EntryMetadata {
+                name: "fresh.rs".to_owned(),
+                full_path: PathBuf::from("fresh.rs"),
+                file_id: Some(30),
+                parent_id: Some(10),
+                attributes: 0,
+                volume_identity: Some(r"C:\".to_owned()),
+            },
+        };
+        index.apply(UpdateBatch {
+            updates: vec![
+                IndexUpdate::Upsert(new_file),
+                IndexUpdate::Remove {
+                    volume_identity: r"C:\".to_owned(),
+                    file_id: 20,
+                },
+            ],
+            issues: Vec::new(),
+            checkpoints: Vec::new(),
+        });
+
+        assert_eq!(index.search("existing.txt", 5), Vec::<String>::new());
+        assert_eq!(index.search("fresh.rs", 5), vec![r"C:\Projects\fresh.rs"]);
     }
 }

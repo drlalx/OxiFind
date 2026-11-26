@@ -1,4 +1,13 @@
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
 
 use oxifind::backend::{CliConfig, UiBackend, detect_default_ui};
 
@@ -9,21 +18,102 @@ use oxifind::engine::IndexScope;
 #[cfg(test)]
 use std::{ffi::OsString, io};
 
+/// Attaches to the parent console (e.g. CMD/PowerShell) on Windows when running in CLI/TUI mode.
+///
+/// Because release builds use `windows_subsystem = "windows"` to prevent a flashing console window
+/// on double-click, CLI/TUI invocations must explicitly attach to an existing console (or allocate
+/// one when `allocate_if_detached` is true, e.g. `--tui` launched from a shortcut).
+#[cfg(windows)]
+fn setup_console_for_cli(allocate_if_detached: bool) {
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows::Win32::System::Console::{
+        ATTACH_PARENT_PROCESS, AllocConsole, AttachConsole, GetStdHandle, STD_ERROR_HANDLE,
+        STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+    };
+    use windows::core::PCWSTR;
+
+    // SAFETY: `AttachConsole` and `AllocConsole` are standard Win32 process-wide console APIs
+    // with no pointer preconditions; failures are handled gracefully.
+    let has_console = unsafe {
+        let attached = AttachConsole(ATTACH_PARENT_PROCESS).is_ok();
+        if attached {
+            true
+        } else if allocate_if_detached {
+            AllocConsole().is_ok()
+        } else {
+            false
+        }
+    };
+
+    if !has_console {
+        return;
+    }
+
+    // SAFETY: `GetStdHandle`, `CreateFileW` (with valid NUL-terminated UTF-16 `CONIN$`/`CONOUT$`),
+    // and `SetStdHandle` are called with valid arguments to rebind standard handles for `std::io`
+    // and `crossterm` after attaching to a console in a `windows` subsystem binary.
+    unsafe {
+        let std_in = GetStdHandle(STD_INPUT_HANDLE);
+        if std_in.is_err() || std_in.as_ref().is_ok_and(|h| h.is_invalid()) {
+            let conin: Vec<u16> = "CONIN$\0".encode_utf16().collect();
+            if let Ok(handle) = CreateFileW(
+                PCWSTR(conin.as_ptr()),
+                FILE_GENERIC_READ.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                None,
+            ) {
+                let _ = SetStdHandle(STD_INPUT_HANDLE, handle);
+            }
+        }
+
+        let std_out = GetStdHandle(STD_OUTPUT_HANDLE);
+        if std_out.is_err() || std_out.as_ref().is_ok_and(|h| h.is_invalid()) {
+            let conout: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
+            if let Ok(handle) = CreateFileW(
+                PCWSTR(conout.as_ptr()),
+                FILE_GENERIC_WRITE.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                None,
+            ) {
+                let _ = SetStdHandle(STD_OUTPUT_HANDLE, handle);
+                let _ = SetStdHandle(STD_ERROR_HANDLE, handle);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn setup_console_for_cli(_allocate_if_detached: bool) {}
+
 fn main() {
     let config = match CliConfig::parse(env::args_os().skip(1)) {
         Ok(cfg) => cfg,
         Err(error) => {
+            setup_console_for_cli(false);
             eprintln!("Application failed: {error}");
             std::process::exit(1);
         }
     };
 
     if config.help_requested {
+        setup_console_for_cli(false);
         print_usage();
         return;
     }
 
     if let Some(action) = config.service_action {
+        // Attach to parent console if invoked from CMD/PowerShell, but never pop up
+        // a new console window when launched headless (e.g. via Task Scheduler).
+        setup_console_for_cli(false);
         match action {
             oxifind::backend::ServiceAction::Run { delay_seconds } => {
                 if let Err(error) = oxifind::engine::run_service(config.scope, delay_seconds) {
@@ -100,19 +190,25 @@ fn main() {
         UiBackend::Egui => oxifind::app::run(config.scope),
         #[cfg(not(feature = "egui-ui"))]
         UiBackend::Egui => {
+            setup_console_for_cli(false);
             eprintln!("Error: The 'egui' GUI backend was not compiled in this binary.");
             std::process::exit(1);
         }
         #[cfg(feature = "tui")]
-        UiBackend::Tui => oxifind::tui::run(config.scope),
+        UiBackend::Tui => {
+            setup_console_for_cli(true);
+            oxifind::tui::run(config.scope)
+        }
         #[cfg(not(feature = "tui"))]
         UiBackend::Tui => {
+            setup_console_for_cli(false);
             eprintln!("Error: The 'tui' Terminal backend was not compiled in this binary.");
             std::process::exit(1);
         }
     };
 
     if let Err(error) = result {
+        setup_console_for_cli(false);
         eprintln!("Application failed: {error}");
         std::process::exit(1);
     }

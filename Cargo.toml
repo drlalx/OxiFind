@@ -17,12 +17,16 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage_FileSystem",
+    "Win32_System_Console",
     "Win32_System_IO",
     "Win32_System_Ioctl",
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -63,5 +67,3 @@ strip = true
 [patch.crates-io]
 # Temporary workaround for mixed-DPI window dragging; remove after the fix ships in winit 0.30.x.
 winit = { git = "https://github.com/LunaticGhoulPiano/winit", rev = "39c4009c41e5977d779cf8a365792c8153ca77c5" }
-
-

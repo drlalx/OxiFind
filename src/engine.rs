@@ -16,7 +16,7 @@ use crate::{
 };
 
 pub const RESULT_LIMIT: usize = 200;
-pub const UPDATE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+pub const UPDATE_POLL_INTERVAL: Duration = Duration::from_secs(3);
 pub const SNAPSHOT_QUIET_DELAY: Duration = Duration::from_secs(15);
 pub const SNAPSHOT_MIN_SAVE_INTERVAL: Duration = Duration::from_secs(60);
 pub const SNAPSHOT_MAX_DIRTY_AGE: Duration = Duration::from_secs(300);
@@ -362,47 +362,79 @@ fn run_search_worker<S: IndexSource + Send + 'static, N: WorkerNotifier>(
 
     let mut latest = SearchRequest::default();
     let mut save_policy = SnapshotSavePolicy::new(Instant::now());
-    while let Ok(mut command) = command_rx.recv() {
-        if let WorkerCommand::Search(_) = command {
-            while let Ok(next) = command_rx.try_recv() {
-                match next {
-                    WorkerCommand::Search(newer_request) => {
-                        command = WorkerCommand::Search(newer_request);
-                    }
-                    other => {
-                        let was_update = matches!(command, WorkerCommand::ApplyUpdates(_));
-                        if notifier
-                            .notify(handle_command(&mut index, &mut latest, command))
-                            .is_err()
-                        {
-                            return;
-                        }
-                        if was_update {
-                            save_policy.mark_dirty(Instant::now());
-                        }
-                        command = other;
-                        break;
-                    }
+    while let Ok(first) = command_rx.recv() {
+        let mut pending_search: Option<SearchRequest> = None;
+        let mut pending_updates: Option<UpdateBatch> = None;
+        let mut pending_failures: Vec<String> = Vec::new();
+
+        let mut enqueue = |cmd: WorkerCommand| match cmd {
+            WorkerCommand::Search(req) => pending_search = Some(req),
+            WorkerCommand::ApplyUpdates(batch) => match pending_updates.as_mut() {
+                Some(existing) => {
+                    existing.updates.extend(batch.updates);
+                    existing.issues.extend(batch.issues);
+                    existing.checkpoints = batch.checkpoints;
                 }
-            }
+                None => pending_updates = Some(batch),
+            },
+            WorkerCommand::UpdateFailed(msg) => pending_failures.push(msg),
+        };
+
+        enqueue(first);
+        while let Ok(next) = command_rx.try_recv() {
+            enqueue(next);
         }
-        let was_update = matches!(command, WorkerCommand::ApplyUpdates(_));
-        if notifier
-            .notify(handle_command(&mut index, &mut latest, command))
-            .is_err()
+
+        // Always prioritize answering user search queries before applying background index updates.
+        if let Some(request) = pending_search
+            && notifier
+                .notify(handle_command(
+                    &mut index,
+                    &mut latest,
+                    WorkerCommand::Search(request),
+                ))
+                .is_err()
         {
             return;
         }
-        let now = Instant::now();
-        if was_update {
+
+        if let Some(batch) = pending_updates {
+            if notifier
+                .notify(handle_command(
+                    &mut index,
+                    &mut latest,
+                    WorkerCommand::ApplyUpdates(batch),
+                ))
+                .is_err()
+            {
+                return;
+            }
+            let now = Instant::now();
             save_policy.mark_dirty(now);
-        }
-        if let Some(ref path) = snapshot_path
-            && save_policy.should_save(now)
-            && crate::persistence::save_snapshot(path, index.journal_checkpoints(), index.entries())
+            if let Some(ref path) = snapshot_path
+                && save_policy.should_save(now)
+                && crate::persistence::save_snapshot(
+                    path,
+                    index.journal_checkpoints(),
+                    index.entries(),
+                )
                 .is_ok()
-        {
-            save_policy.mark_saved(now);
+            {
+                save_policy.mark_saved(now);
+            }
+        }
+
+        for msg in pending_failures {
+            if notifier
+                .notify(handle_command(
+                    &mut index,
+                    &mut latest,
+                    WorkerCommand::UpdateFailed(msg),
+                ))
+                .is_err()
+            {
+                return;
+            }
         }
     }
 
@@ -414,7 +446,7 @@ fn run_search_worker<S: IndexSource + Send + 'static, N: WorkerNotifier>(
     }
 }
 
-fn handle_command(
+pub(crate) fn handle_command(
     index: &mut SearchIndex,
     latest: &mut SearchRequest,
     command: WorkerCommand,
@@ -465,7 +497,7 @@ fn spawn_update_poller<S: IndexSource + Send + 'static>(
     });
 }
 
-fn poll_updates(
+pub(crate) fn poll_updates(
     source: &impl IndexSource,
     checkpoints: &mut Vec<JournalCheckpoint>,
 ) -> ControlFlow<(), Option<WorkerCommand>> {
